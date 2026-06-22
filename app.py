@@ -19,7 +19,8 @@ if arquivo_upload is not None:
     if arquivo_upload.name.endswith('.csv'):
         df_original = pd.read_csv(arquivo_upload, header=2, dtype={"ORDEM": str})
     else:
-        df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str})
+        # CORREÇÃO AQUI: adicionado dayfirst=True para tratar o dia/mes/ano
+        df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str}, dayfirst=True)
     
     df_original = df_original.dropna(how='all')
     
@@ -37,9 +38,9 @@ if arquivo_upload is not None:
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
         # Tratamento rigoroso de Datas
-        df_original["DATA"] = pd.to_datetime(df_original["DATA"], errors="coerce")
-        df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], errors="coerce")
-        df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], errors="coerce")
+        df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
+        df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
+        df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
         
         df_original.loc[df_original["DATA"].dt.year <= 1970, "DATA"] = pd.NaT
         df_original.loc[df_original["DT_PRAZO_OC"].dt.year <= 1970, "DT_PRAZO_OC"] = pd.NaT
