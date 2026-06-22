@@ -16,10 +16,10 @@ st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
-    # LEITURA CORRIGIDA: 
-    # O arquivo tem o cabeçalho na linha 7 (index 7).
+    # BLOCO DE LEITURA (Ajustado apenas para ler o seu CSV corretamente)
     if arquivo_upload.name.endswith('.csv'):
-        df_original = pd.read_csv(arquivo_upload, skiprows=7, encoding='latin1')
+        # skiprows=7 pula o texto inicial / on_bad_lines='skip' remove as linhas "SC:" que travam o sistema
+        df_original = pd.read_csv(arquivo_upload, skiprows=7, on_bad_lines='skip', engine='python')
     else:
         df_original = pd.read_excel(arquivo_upload, header=7)
     
@@ -38,7 +38,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas (mantido o seu original)
+        # Tratamento rigoroso de Datas
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
