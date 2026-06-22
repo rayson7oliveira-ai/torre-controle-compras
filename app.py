@@ -1,5 +1,3 @@
-Aqui está o código completo, consolidado e pronto para colar — com todas as 8 correções aplicadas + a 5ª métrica de pendências de aprovação:
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,21 +7,13 @@ import io
 import re
 import unicodedata
 
-# Configuração da página do Streamlit
 st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
 
-# ==================================================================
-# IDENTIDADE DO SISTEMA - APENAS FOLLOW-UP DE COMPRAS
-# ==================================================================
 st.title("🗂️ FOLLOW-UP DE COMPRAS")
 st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 
-# ==================================================================
-# HELPERS DE LEITURA E LIMPEZA (CORREÇÕES CIGAM)
-# ==================================================================
 
-def _normalizar_nome(txt: str) -> str:
-    """Remove acentos, espaços extras e deixa em UPPER para comparação."""
+def _normalizar_nome(txt):
     if txt is None:
         return ""
     s = str(txt).strip().upper()
@@ -32,11 +22,7 @@ def _normalizar_nome(txt: str) -> str:
     return s
 
 
-def find_col(df: pd.DataFrame, candidatos):
-    """
-    Localiza a coluna real do DataFrame a partir de uma lista de nomes
-    candidatos (case/acento/espaço-insensível). Aceita match exato e parcial.
-    """
+def find_col(df, candidatos):
     norm_map = {_normalizar_nome(c): c for c in df.columns}
     for cand in candidatos:
         n = _normalizar_nome(cand)
@@ -51,7 +37,6 @@ def find_col(df: pd.DataFrame, candidatos):
 
 
 def _converter_ordem_texto(valor):
-    """Converter para preservar a coluna ORDEM como texto (sem perder zeros)."""
     if valor is None:
         return ""
     s = str(valor).strip()
@@ -62,8 +47,7 @@ def _converter_ordem_texto(valor):
     return s
 
 
-def _padronizar_ordem(serie: pd.Series) -> pd.Series:
-    """Restaura zeros à esquerda usando o comprimento máximo observado (>=4)."""
+def _padronizar_ordem(serie):
     s = serie.astype(str).str.strip()
     apenas_digitos = s.str.fullmatch(r"\d+")
     if apenas_digitos.any():
@@ -74,9 +58,7 @@ def _padronizar_ordem(serie: pd.Series) -> pd.Series:
     return s
 
 
-def limpar_data_cigam(serie: pd.Series) -> pd.Series:
-    """Substitui placeholders típicos do CIGAM ('01/01/0001', '-', '0', etc.)
-    por NaN antes da conversão para datetime."""
+def limpar_data_cigam(serie):
     if serie is None:
         return serie
     s = serie.astype(str).str.strip()
@@ -86,11 +68,7 @@ def limpar_data_cigam(serie: pd.Series) -> pd.Series:
     return s
 
 
-def parse_data_robusta(serie: pd.Series) -> pd.Series:
-    """
-    Conversão de datas tolerante ao locale do Windows do usuário.
-    Cascata: datetime nativo -> dayfirst -> formatos explícitos -> serial Excel.
-    """
+def parse_data_robusta(serie):
     if serie is None:
         return pd.Series(pd.NaT, index=[])
 
@@ -134,17 +112,11 @@ def parse_data_robusta(serie: pd.Series) -> pd.Series:
     return resultado
 
 
-# ==================================================================
-# UPLOAD
-# ==================================================================
 arquivo_upload = st.file_uploader(
     "Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"]
 )
 
 if arquivo_upload is not None:
-    # ------------------------------------------------------------------
-    # LEITURA TOLERANTE: tudo como texto + converter específico p/ ORDEM
-    # ------------------------------------------------------------------
     converters_padrao = {
         "ORDEM": _converter_ordem_texto,
         "Ordem": _converter_ordem_texto,
@@ -168,16 +140,9 @@ if arquivo_upload is not None:
         st.error(f"Erro ao ler o arquivo: {e}")
         st.stop()
 
-    # Normaliza nomes de colunas
     df_original.columns = [str(c).strip() for c in df_original.columns]
-
-    # Remove linhas totalmente vazias
     df_original = df_original.dropna(how="all")
 
-    # ------------------------------------------------------------------
-    # CIGAM EXPORTA DUAS COLUNAS "DATA": a 1ª é da SC, a 2ª é da OC.
-    # Renomeia a 1ª para DATA_SC; a 2ª permanece como DATA (criação da OC).
-    # ------------------------------------------------------------------
     cols_data_idx = [i for i, c in enumerate(df_original.columns)
                      if str(c).strip().upper() in {"DATA", "DATA.1"}]
     if len(cols_data_idx) >= 2:
@@ -189,9 +154,6 @@ if arquivo_upload is not None:
                 primeira = False
         df_original = df_original.rename(columns=novos_nomes)
 
-    # ------------------------------------------------------------------
-    # DETECÇÃO RESILIENTE DAS COLUNAS-CHAVE
-    # ------------------------------------------------------------------
     col_ordem      = find_col(df_original, ["ORDEM", "ORDEM_OC", "NUM_ORDEM", "OC", "NUMERO ORDEM"])
     col_controle   = find_col(df_original, ["CONTROLE", "STATUS", "SITUACAO"])
     col_data       = find_col(df_original, ["DATA", "DATA_CRIACAO", "DT_CRIACAO", "DATA EMISSAO", "DT_EMISSAO"])
@@ -204,24 +166,26 @@ if arquivo_upload is not None:
         st.error("Coluna 'ORDEM' não encontrada no arquivo.")
         st.stop()
 
-    # Padroniza nomes para o resto do código funcionar inalterado
     renames = {}
-    if col_ordem != "ORDEM": renames[col_ordem] = "ORDEM"
-    if col_controle and col_controle != "CONTROLE": renames[col_controle] = "CONTROLE"
-    if col_data and col_data != "DATA": renames[col_data] = "DATA"
-    if col_prazo and col_prazo != "DT_PRAZO_OC": renames[col_prazo] = "DT_PRAZO_OC"
-    if col_aprovacao and col_aprovacao != "DATA_APROVACAO": renames[col_aprovacao] = "DATA_APROVACAO"
-    if col_comprador and col_comprador != "COMPRADOR": renames[col_comprador] = "COMPRADOR"
-    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR": renames[col_fornecedor] = "CD_FORNECEDOR"
+    if col_ordem != "ORDEM":
+        renames[col_ordem] = "ORDEM"
+    if col_controle and col_controle != "CONTROLE":
+        renames[col_controle] = "CONTROLE"
+    if col_data and col_data != "DATA":
+        renames[col_data] = "DATA"
+    if col_prazo and col_prazo != "DT_PRAZO_OC":
+        renames[col_prazo] = "DT_PRAZO_OC"
+    if col_aprovacao and col_aprovacao != "DATA_APROVACAO":
+        renames[col_aprovacao] = "DATA_APROVACAO"
+    if col_comprador and col_comprador != "COMPRADOR":
+        renames[col_comprador] = "COMPRADOR"
+    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR":
+        renames[col_fornecedor] = "CD_FORNECEDOR"
     if renames:
         df_original = df_original.rename(columns=renames)
 
-    # ------------------------------------------------------------------
-    # TRATAMENTO DA COLUNA ORDEM (preserva zeros à esquerda)
-    # ------------------------------------------------------------------
     df_original["ORDEM_LIMPA"] = _padronizar_ordem(df_original["ORDEM"]).str.strip()
 
-    # Filtro de solicitações e linhas fantasmas
     df_original = df_original[
         ~df_original["ORDEM_LIMPA"].isin(["0", "0.0", "", "nan", "None", "-", "ORDEM"])
     ].copy()
@@ -234,9 +198,6 @@ if arquivo_upload is not None:
 
     df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
 
-    # ------------------------------------------------------------------
-    # NORMALIZA COMPRADOR / FORNECEDOR (tira espaços extras dos códigos)
-    # ------------------------------------------------------------------
     for c in ("COMPRADOR", "CD_FORNECEDOR"):
         if c in df_original.columns:
             df_original[c] = (
@@ -244,9 +205,6 @@ if arquivo_upload is not None:
                 .replace({"nan": pd.NA, "None": pd.NA, "-": pd.NA, "": pd.NA})
             )
 
-    # ------------------------------------------------------------------
-    # CONVERSÃO ROBUSTA DE DATAS (independente do locale + lixo 01/01/0001)
-    # ------------------------------------------------------------------
     if "DATA" in df_original.columns:
         df_original["DATA"] = parse_data_robusta(limpar_data_cigam(df_original["DATA"]))
     else:
@@ -264,9 +222,6 @@ if arquivo_upload is not None:
 
     hoje = pd.to_datetime(datetime.today().date())
 
-    # ------------------------------------------------------------------
-    # MAPEAMENTO DE STATUS COMPLETO (cobre todos status reais do CIGAM)
-    # ------------------------------------------------------------------
     df_original["CONTROLE_LIMPO"] = (
         df_original["CONTROLE"].astype(str).str.strip()
         if "CONTROLE" in df_original.columns else ""
@@ -280,7 +235,6 @@ if arquivo_upload is not None:
         "90 - CANCELADA":          "CANCELADA",
         "90 - CANCELADO":          "CANCELADA",
         "VV - VERBA ULTRAPASSADA": "PENDENTE DE APROVAÇÃO",
-        # Variantes só com código numérico
         "10": "PENDENTE",
         "20": "APROVADA SEM ENVIO",
         "30": "RECEBIDA PARCIAL",
@@ -293,9 +247,6 @@ if arquivo_upload is not None:
         df_original["CONTROLE_LIMPO"]
     )
 
-    # ------------------------------------------------------------------
-    # CÁLCULO DE LEAD TIME
-    # ------------------------------------------------------------------
     def calcular_lead_time_flora(linha):
         if "CANCELADA" in str(linha["STATUS_AMIGAVEL"]).upper() or "90" in str(linha["CONTROLE_LIMPO"]):
             return 888, "Cancelada", "⚫ Cancelada"
@@ -321,9 +272,6 @@ if arquivo_upload is not None:
 
     df_original.loc[df_original["SITUACAO_PRAZO"] == "Cancelada", "STATUS_AMIGAVEL"] = "CANCELADA"
 
-    # ------------------------------------------------------------------
-    # ALERTA DE APROVAÇÃO TRAVADA (verifica pela chave CONTROLE — não pelo rótulo)
-    # ------------------------------------------------------------------
     def calcular_dias_travados(linha):
         if "VV" in str(linha["CONTROLE_LIMPO"]).upper() and not pd.isna(linha["DATA_APROVACAO"]):
             dias = (hoje - linha["DATA_APROVACAO"]).days
@@ -332,20 +280,13 @@ if arquivo_upload is not None:
         return "Ok"
     df_original["ALERTA_APROVACAO"] = df_original.apply(calcular_dias_travados, axis=1)
 
-    # ------------------------------------------------------------------
-    # DETECÇÃO DA COLUNA DE SETOR/GRUPO
-    # ------------------------------------------------------------------
     col_setor = find_col(df_original, ["SETOR"]) or find_col(df_original, ["GRUPO"])
     if col_setor is None:
         df_original["CLASSIFICACAO"] = "Geral"
         col_setor = "CLASSIFICACAO"
 
-    # Elimina duplicadas por OC antes de aplicar filtros
     df_oc = df_original.drop_duplicates(subset=["ORDEM_LIMPA"]).copy()
 
-    # ==================================================================
-    # FILTRO DE PERÍODO USANDO A DATA DE CRIAÇÃO DA OC ('DATA')
-    # ==================================================================
     st.markdown("### 📅 Filtro por Período de Criação da Ordem")
 
     datas_validas = df_oc["DATA"].dropna()
@@ -371,19 +312,17 @@ if arquivo_upload is not None:
             & (df_filtrado_data["DATA"].dt.date <= dt_fim)
         ]
 
-    # ==================================================================
-    # PAINEL DE FILTROS ADICIONAIS
-    # ==================================================================
     st.markdown("### 🔍 Filtros de Controle")
     f1, f2, f3, f4 = st.columns(4)
 
     with f1:
-        lista_compradores = (
-            ["Todos"] + sorted(
+        if "COMPRADOR" in df_filtrado_data.columns:
+            lista_compradores = ["Todos"] + sorted(
                 [str(x) for x in df_filtrado_data["COMPRADOR"].dropna().unique()
                  if str(x).strip() not in ["nan", "None", "", "-"]]
-            ) if "COMPRADOR" in df_filtrado_data.columns else ["Todos"]
-        )
+            )
+        else:
+            lista_compradores = ["Todos"]
         comprador_sel = st.selectbox("Comprador", lista_compradores)
     with f2:
         lista_status = ["Todos"] + sorted(
@@ -392,23 +331,21 @@ if arquivo_upload is not None:
         )
         status_sel = st.selectbox("Status", lista_status)
     with f3:
-        lista_fornecedores = (
-            ["Todos"] + sorted(
+        if "CD_FORNECEDOR" in df_filtrado_data.columns:
+            lista_fornecedores = ["Todos"] + sorted(
                 [str(x) for x in df_filtrado_data["CD_FORNECEDOR"].dropna().unique()
                  if str(x).strip() not in ["nan", "None", "", "-"]]
-            ) if "CD_FORNECEDOR" in df_filtrado_data.columns else ["Todos"]
-        )
+            )
+        else:
+            lista_fornecedores = ["Todos"]
         fornecedor_sel = st.selectbox("Fornecedor", lista_fornecedores)
     with f4:
         lista_prazos = ["Todos", "Atrasada", "Vence em até 10 dias", "Dentro do Prazo",
                         "Sem Prazo", "Recebida Total", "Cancelada"]
         prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
 
-    # ==================================================================
-    # BUSCA POR NÚMERO DA ORDEM (parcial, ignora zeros à esquerda)
-    # ==================================================================
     busca_ordem = st.text_input(
-        "🔎 Buscar por número da Ordem (parcial ou completo — ex.: 66723 ou 066723)",
+        "🔎 Buscar por número da Ordem (parcial ou completo - ex.: 66723 ou 066723)",
         value="",
         placeholder="Digite o número da OC...",
     ).strip()
@@ -428,7 +365,6 @@ if arquivo_upload is not None:
     if prazo_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == prazo_sel]
 
-    # Busca por ORDEM: case-insensitive, ignora zeros à esquerda, match parcial
     if busca_ordem:
         termo = busca_ordem.lstrip("0").upper()
         if termo == "":
@@ -444,12 +380,8 @@ if arquivo_upload is not None:
             & (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
         ]
 
-    # Navegação por Abas
     aba_operacional, aba_executivo = st.tabs(["📋 Follow-up Operacional", "📊 Dashboard Executivo"])
 
-    # ------------------------------------------------------------------
-    # ABA 1: FOLLOW-UP OPERACIONAL
-    # ------------------------------------------------------------------
     with aba_operacional:
         st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
 
@@ -490,19 +422,26 @@ if arquivo_upload is not None:
             "SITUACAO_PRAZO": "Situação",
         }
 
-        if "CD_FORNECEDOR" in df_filtrado.columns: colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
-        if "COMPRADOR" in df_filtrado.columns:   colunas_tabela["COMPRADOR"]    = "Comprador"
+        if "CD_FORNECEDOR" in df_filtrado.columns:
+            colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
+        if "COMPRADOR" in df_filtrado.columns:
+            colunas_tabela["COMPRADOR"] = "Comprador"
 
         df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
         df_tabela["Data Criação da Ordem"] = df_tabela["Data Criação da Ordem"].dt.strftime("%d/%m/%Y").fillna("-")
         df_tabela["Prazo Entrega"]         = df_tabela["Prazo Entrega"].dt.strftime("%d/%m/%Y").fillna("-")
 
         def colorir_linhas_situacao(val):
-            if "🔴" in str(val): return "background-color: #FFCCCC; color: black;"
-            elif "🟡" in str(val): return "background-color: #FFF2CC; color: black;"
-            elif "🟢" in str(val): return "background-color: #D9EAD3; color: black;"
-            elif "🔵" in str(val): return "background-color: #E6F2FF; color: black;"
-            elif "⚫" in str(val): return "background-color: #EAEAEA; color: #7F7F7F;"
+            if "🔴" in str(val):
+                return "background-color: #FFCCCC; color: black;"
+            elif "🟡" in str(val):
+                return "background-color: #FFF2CC; color: black;"
+            elif "🟢" in str(val):
+                return "background-color: #D9EAD3; color: black;"
+            elif "🔵" in str(val):
+                return "background-color: #E6F2FF; color: black;"
+            elif "⚫" in str(val):
+                return "background-color: #EAEAEA; color: #7F7F7F;"
             return ""
 
         try:
@@ -512,9 +451,6 @@ if arquivo_upload is not None:
 
         st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
 
-    # ------------------------------------------------------------------
-    # ABA 2: DASHBOARD EXECUTIVO
-    # ------------------------------------------------------------------
     with aba_executivo:
         st.markdown("### 📊 Indicadores Consolidados da Carteira")
 
