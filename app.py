@@ -1,3 +1,5 @@
+Aqui está o código completo, consolidado e pronto para colar — com todas as 8 correções aplicadas + a 5ª métrica de pendências de aprovação:
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -34,17 +36,12 @@ def find_col(df: pd.DataFrame, candidatos):
     """
     Localiza a coluna real do DataFrame a partir de uma lista de nomes
     candidatos (case/acento/espaço-insensível). Aceita match exato e parcial.
-    Retorna o nome ORIGINAL da coluna ou None.
     """
     norm_map = {_normalizar_nome(c): c for c in df.columns}
-
-    # 1) Match exato (normalizado)
     for cand in candidatos:
         n = _normalizar_nome(cand)
         if n in norm_map:
             return norm_map[n]
-
-    # 2) Match parcial (contém)
     for cand in candidatos:
         n = _normalizar_nome(cand)
         for k_norm, k_orig in norm_map.items():
@@ -54,29 +51,20 @@ def find_col(df: pd.DataFrame, candidatos):
 
 
 def _converter_ordem_texto(valor):
-    """
-    Converter usado no read_excel/read_csv para preservar a coluna ORDEM
-    como texto, evitando perda de zeros à esquerda na inferência de tipo.
-    """
+    """Converter para preservar a coluna ORDEM como texto (sem perder zeros)."""
     if valor is None:
         return ""
     s = str(valor).strip()
     if s.lower() in {"nan", "none", "nat"}:
         return ""
-    # Se vier como "66723.0" (float do Excel), remove o ".0"
     if re.fullmatch(r"-?\d+\.0+", s):
         s = s.split(".")[0]
     return s
 
 
 def _padronizar_ordem(serie: pd.Series) -> pd.Series:
-    """
-    Restaura zeros à esquerda quando o Excel já entregou o número sem o zero.
-    Usa o comprimento MÁXIMO observado na coluna como referência (>=4 dígitos),
-    evitando padding artificial em códigos curtos legítimos.
-    """
+    """Restaura zeros à esquerda usando o comprimento máximo observado (>=4)."""
     s = serie.astype(str).str.strip()
-    # Apenas dígitos puros são candidatos a padding
     apenas_digitos = s.str.fullmatch(r"\d+")
     if apenas_digitos.any():
         comprimentos = s[apenas_digitos].str.len()
@@ -86,27 +74,31 @@ def _padronizar_ordem(serie: pd.Series) -> pd.Series:
     return s
 
 
+def limpar_data_cigam(serie: pd.Series) -> pd.Series:
+    """Substitui placeholders típicos do CIGAM ('01/01/0001', '-', '0', etc.)
+    por NaN antes da conversão para datetime."""
+    if serie is None:
+        return serie
+    s = serie.astype(str).str.strip()
+    placeholders = {"01/01/0001", "1/1/0001", "0001-01-01",
+                    "-", "0", "00/00/0000", "nan", "none", "nat", ""}
+    s = s.where(~s.str.lower().isin(placeholders), other=pd.NA)
+    return s
+
+
 def parse_data_robusta(serie: pd.Series) -> pd.Series:
     """
     Conversão de datas tolerante ao locale do Windows do usuário.
-    Cascata:
-      1) Se já for datetime, retorna.
-      2) Tenta pd.to_datetime nativo (dayfirst=True).
-      3) Para os NaT remanescentes, tenta formatos explícitos comuns.
-      4) Para os NaT remanescentes que parecem número, trata como
-         serial do Excel (origin 1899-12-30).
+    Cascata: datetime nativo -> dayfirst -> formatos explícitos -> serial Excel.
     """
     if serie is None:
         return pd.Series(pd.NaT, index=[])
 
-    # 1) Já é datetime?
     if pd.api.types.is_datetime64_any_dtype(serie):
         resultado = pd.to_datetime(serie, errors="coerce")
     else:
-        # 2) Conversão geral (dayfirst para padrão BR, mas tolerante)
         resultado = pd.to_datetime(serie, errors="coerce", dayfirst=True)
 
-    # 3) Tentar formatos explícitos para os que falharam
     mask_nat = resultado.isna() & serie.notna()
     if mask_nat.any():
         textos = serie[mask_nat].astype(str).str.strip()
@@ -126,12 +118,10 @@ def parse_data_robusta(serie: pd.Series) -> pd.Series:
                 mask_nat = resultado.isna() & serie.notna()
                 textos = serie[mask_nat].astype(str).str.strip()
 
-    # 4) Serial do Excel (número de dias desde 1899-12-30)
     mask_nat = resultado.isna() & serie.notna()
     if mask_nat.any():
         numeros = pd.to_numeric(serie[mask_nat], errors="coerce")
         validos = numeros.dropna()
-        # Faixa razoável de seriais (entre 1990 e 2070 aprox.)
         validos = validos[(validos > 32000) & (validos < 80000)]
         if not validos.empty:
             datas_excel = pd.to_datetime(
@@ -139,7 +129,6 @@ def parse_data_robusta(serie: pd.Series) -> pd.Series:
             )
             resultado.loc[datas_excel.index] = datas_excel
 
-    # Limpeza de datas inválidas (epoch / 1970 indica conversão errada)
     resultado = pd.to_datetime(resultado, errors="coerce")
     resultado.loc[resultado.dt.year <= 1970] = pd.NaT
     return resultado
@@ -165,62 +154,67 @@ if arquivo_upload is not None:
     try:
         if arquivo_upload.name.lower().endswith(".csv"):
             df_original = pd.read_csv(
-                arquivo_upload,
-                header=2,
-                dtype=str,                      # tudo como texto p/ preservar formatação
-                converters=converters_padrao,   # garante ORDEM como string limpa
-                keep_default_na=False,
+                arquivo_upload, header=2, dtype=str,
+                converters=converters_padrao, keep_default_na=False,
                 na_values=["", "nan", "NaN", "None", "NaT", "-"],
             )
         else:
             df_original = pd.read_excel(
-                arquivo_upload,
-                header=2,
-                dtype=str,
-                converters=converters_padrao,
-                keep_default_na=False,
+                arquivo_upload, header=2, dtype=str,
+                converters=converters_padrao, keep_default_na=False,
                 na_values=["", "nan", "NaN", "None", "NaT", "-"],
             )
     except Exception as e:
         st.error(f"Erro ao ler o arquivo: {e}")
         st.stop()
 
-    # Normaliza nomes de colunas (remove espaços invisíveis no header)
+    # Normaliza nomes de colunas
     df_original.columns = [str(c).strip() for c in df_original.columns]
 
     # Remove linhas totalmente vazias
     df_original = df_original.dropna(how="all")
 
     # ------------------------------------------------------------------
+    # CIGAM EXPORTA DUAS COLUNAS "DATA": a 1ª é da SC, a 2ª é da OC.
+    # Renomeia a 1ª para DATA_SC; a 2ª permanece como DATA (criação da OC).
+    # ------------------------------------------------------------------
+    cols_data_idx = [i for i, c in enumerate(df_original.columns)
+                     if str(c).strip().upper() in {"DATA", "DATA.1"}]
+    if len(cols_data_idx) >= 2:
+        novos_nomes = {}
+        primeira = True
+        for c in df_original.columns:
+            if str(c).strip().upper() in {"DATA", "DATA.1"}:
+                novos_nomes[c] = "DATA_SC" if primeira else "DATA"
+                primeira = False
+        df_original = df_original.rename(columns=novos_nomes)
+
+    # ------------------------------------------------------------------
     # DETECÇÃO RESILIENTE DAS COLUNAS-CHAVE
     # ------------------------------------------------------------------
-    col_ordem        = find_col(df_original, ["ORDEM", "ORDEM_OC", "NUM_ORDEM", "OC", "NUMERO ORDEM"])
-    col_controle     = find_col(df_original, ["CONTROLE", "STATUS", "SITUACAO"])
-    col_data         = find_col(df_original, ["DATA", "DATA_CRIACAO", "DT_CRIACAO", "DATA EMISSAO", "DT_EMISSAO"])
-    col_prazo        = find_col(df_original, ["DT_PRAZO_OC", "PRAZO", "DT_PRAZO", "DATA_PRAZO", "PRAZO_ENTREGA"])
-    col_aprovacao    = find_col(df_original, ["DATA_APROVACAO", "DT_APROVACAO", "APROVACAO"])
-    col_comprador    = find_col(df_original, ["COMPRADOR", "USUARIO", "RESPONSAVEL"])
-    col_fornecedor   = find_col(df_original, ["CD_FORNECEDOR", "FORNECEDOR", "COD_FORNECEDOR"])
+    col_ordem      = find_col(df_original, ["ORDEM", "ORDEM_OC", "NUM_ORDEM", "OC", "NUMERO ORDEM"])
+    col_controle   = find_col(df_original, ["CONTROLE", "STATUS", "SITUACAO"])
+    col_data       = find_col(df_original, ["DATA", "DATA_CRIACAO", "DT_CRIACAO", "DATA EMISSAO", "DT_EMISSAO"])
+    col_prazo      = find_col(df_original, ["DT_PRAZO_OC", "PRAZO", "DT_PRAZO", "DATA_PRAZO", "PRAZO_ENTREGA"])
+    col_aprovacao  = find_col(df_original, ["DATA_APROVACAO", "DT_APROVACAO", "APROVACAO"])
+    col_comprador  = find_col(df_original, ["COMPRADOR", "USUARIO", "RESPONSAVEL"])
+    col_fornecedor = find_col(df_original, ["CD_FORNECEDOR", "FORNECEDOR", "COD_FORNECEDOR"])
 
     if not col_ordem:
         st.error("Coluna 'ORDEM' não encontrada no arquivo.")
         st.stop()
 
-    # Padroniza o nome da coluna ORDEM para o resto do código funcionar
-    if col_ordem != "ORDEM":
-        df_original = df_original.rename(columns={col_ordem: "ORDEM"})
-    if col_controle and col_controle != "CONTROLE":
-        df_original = df_original.rename(columns={col_controle: "CONTROLE"})
-    if col_data and col_data != "DATA":
-        df_original = df_original.rename(columns={col_data: "DATA"})
-    if col_prazo and col_prazo != "DT_PRAZO_OC":
-        df_original = df_original.rename(columns={col_prazo: "DT_PRAZO_OC"})
-    if col_aprovacao and col_aprovacao != "DATA_APROVACAO":
-        df_original = df_original.rename(columns={col_aprovacao: "DATA_APROVACAO"})
-    if col_comprador and col_comprador != "COMPRADOR":
-        df_original = df_original.rename(columns={col_comprador: "COMPRADOR"})
-    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR":
-        df_original = df_original.rename(columns={col_fornecedor: "CD_FORNECEDOR"})
+    # Padroniza nomes para o resto do código funcionar inalterado
+    renames = {}
+    if col_ordem != "ORDEM": renames[col_ordem] = "ORDEM"
+    if col_controle and col_controle != "CONTROLE": renames[col_controle] = "CONTROLE"
+    if col_data and col_data != "DATA": renames[col_data] = "DATA"
+    if col_prazo and col_prazo != "DT_PRAZO_OC": renames[col_prazo] = "DT_PRAZO_OC"
+    if col_aprovacao and col_aprovacao != "DATA_APROVACAO": renames[col_aprovacao] = "DATA_APROVACAO"
+    if col_comprador and col_comprador != "COMPRADOR": renames[col_comprador] = "COMPRADOR"
+    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR": renames[col_fornecedor] = "CD_FORNECEDOR"
+    if renames:
+        df_original = df_original.rename(columns=renames)
 
     # ------------------------------------------------------------------
     # TRATAMENTO DA COLUNA ORDEM (preserva zeros à esquerda)
@@ -241,49 +235,66 @@ if arquivo_upload is not None:
     df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
 
     # ------------------------------------------------------------------
-    # CONVERSÃO ROBUSTA DE DATAS (independe do locale)
+    # NORMALIZA COMPRADOR / FORNECEDOR (tira espaços extras dos códigos)
+    # ------------------------------------------------------------------
+    for c in ("COMPRADOR", "CD_FORNECEDOR"):
+        if c in df_original.columns:
+            df_original[c] = (
+                df_original[c].astype(str).str.strip()
+                .replace({"nan": pd.NA, "None": pd.NA, "-": pd.NA, "": pd.NA})
+            )
+
+    # ------------------------------------------------------------------
+    # CONVERSÃO ROBUSTA DE DATAS (independente do locale + lixo 01/01/0001)
     # ------------------------------------------------------------------
     if "DATA" in df_original.columns:
-        df_original["DATA"] = parse_data_robusta(df_original["DATA"])
+        df_original["DATA"] = parse_data_robusta(limpar_data_cigam(df_original["DATA"]))
     else:
         df_original["DATA"] = pd.NaT
 
     if "DT_PRAZO_OC" in df_original.columns:
-        df_original["DT_PRAZO_OC"] = parse_data_robusta(df_original["DT_PRAZO_OC"])
+        df_original["DT_PRAZO_OC"] = parse_data_robusta(limpar_data_cigam(df_original["DT_PRAZO_OC"]))
     else:
         df_original["DT_PRAZO_OC"] = pd.NaT
 
     if "DATA_APROVACAO" in df_original.columns:
-        df_original["DATA_APROVACAO"] = parse_data_robusta(df_original["DATA_APROVACAO"])
+        df_original["DATA_APROVACAO"] = parse_data_robusta(limpar_data_cigam(df_original["DATA_APROVACAO"]))
     else:
         df_original["DATA_APROVACAO"] = pd.NaT
 
     hoje = pd.to_datetime(datetime.today().date())
 
     # ------------------------------------------------------------------
-    # MAPEAMENTO DE STATUS (igual ao original)
+    # MAPEAMENTO DE STATUS COMPLETO (cobre todos status reais do CIGAM)
     # ------------------------------------------------------------------
-    df_original["CONTROLE_LIMPO"] = df_original["CONTROLE"].astype(str).str.strip() \
+    df_original["CONTROLE_LIMPO"] = (
+        df_original["CONTROLE"].astype(str).str.strip()
         if "CONTROLE" in df_original.columns else ""
+    )
     mapa_status = {
-        "20 - APROVADO": "APROVADA SEM ENVIO",
-        "40 - ENVIADO EMAIL": "ENVIADA AO FORNECEDOR",
-        "35 - RECEBIDA - TOTAL": "RECEBIDA TOTAL",
-        "VV - VERBA ULTRAPASSADA": "AGUARDANDO APROVAÇÃO",
-        "90 - CANCELADO": "CANCELADA",
-        "90 - CANCELADA": "CANCELADA",
+        "10 - PENDENTE":           "PENDENTE",
+        "20 - APROVADO":           "APROVADA SEM ENVIO",
+        "30 - RECEBIDA - PARCIAL": "RECEBIDA PARCIAL",
+        "35 - RECEBIDA - TOTAL":   "RECEBIDA TOTAL",
+        "40 - ENVIADO EMAIL":      "ENVIADA AO FORNECEDOR",
+        "90 - CANCELADA":          "CANCELADA",
+        "90 - CANCELADO":          "CANCELADA",
+        "VV - VERBA ULTRAPASSADA": "PENDENTE DE APROVAÇÃO",
+        # Variantes só com código numérico
+        "10": "PENDENTE",
         "20": "APROVADA SEM ENVIO",
-        "40": "ENVIADA AO FORNECEDOR",
+        "30": "RECEBIDA PARCIAL",
         "35": "RECEBIDA TOTAL",
-        "VV": "AGUARDANDO APROVAÇÃO",
+        "40": "ENVIADA AO FORNECEDOR",
         "90": "CANCELADA",
+        "VV": "PENDENTE DE APROVAÇÃO",
     }
     df_original["STATUS_AMIGAVEL"] = df_original["CONTROLE_LIMPO"].map(mapa_status).fillna(
         df_original["CONTROLE_LIMPO"]
     )
 
     # ------------------------------------------------------------------
-    # CÁLCULO DE LEAD TIME (igual ao original)
+    # CÁLCULO DE LEAD TIME
     # ------------------------------------------------------------------
     def calcular_lead_time_flora(linha):
         if "CANCELADA" in str(linha["STATUS_AMIGAVEL"]).upper() or "90" in str(linha["CONTROLE_LIMPO"]):
@@ -311,10 +322,10 @@ if arquivo_upload is not None:
     df_original.loc[df_original["SITUACAO_PRAZO"] == "Cancelada", "STATUS_AMIGAVEL"] = "CANCELADA"
 
     # ------------------------------------------------------------------
-    # ALERTA DE APROVAÇÃO TRAVADA
+    # ALERTA DE APROVAÇÃO TRAVADA (verifica pela chave CONTROLE — não pelo rótulo)
     # ------------------------------------------------------------------
     def calcular_dias_travados(linha):
-        if "AGUARDANDO APROVAÇÃO" in str(linha["STATUS_AMIGAVEL"]).upper() and not pd.isna(linha["DATA_APROVACAO"]):
+        if "VV" in str(linha["CONTROLE_LIMPO"]).upper() and not pd.isna(linha["DATA_APROVACAO"]):
             dias = (hoje - linha["DATA_APROVACAO"]).days
             if dias >= 3:
                 return f"⚠️ Travado há {dias} dias!"
@@ -393,6 +404,15 @@ if arquivo_upload is not None:
                         "Sem Prazo", "Recebida Total", "Cancelada"]
         prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
 
+    # ==================================================================
+    # BUSCA POR NÚMERO DA ORDEM (parcial, ignora zeros à esquerda)
+    # ==================================================================
+    busca_ordem = st.text_input(
+        "🔎 Buscar por número da Ordem (parcial ou completo — ex.: 66723 ou 066723)",
+        value="",
+        placeholder="Digite o número da OC...",
+    ).strip()
+
     st.markdown("---")
     apenas_gargalos = st.checkbox(
         "🚨 **Focar Apenas em Pendências** (Esconder OCs concluídas, canceladas ou no prazo)"
@@ -408,9 +428,19 @@ if arquivo_upload is not None:
     if prazo_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == prazo_sel]
 
+    # Busca por ORDEM: case-insensitive, ignora zeros à esquerda, match parcial
+    if busca_ordem:
+        termo = busca_ordem.lstrip("0").upper()
+        if termo == "":
+            termo = "0"
+        df_filtrado = df_filtrado[
+            df_filtrado["ORDEM_LIMPA"].astype(str).str.lstrip("0").str.upper()
+            .str.contains(termo, na=False)
+        ]
+
     if apenas_gargalos:
         df_filtrado = df_filtrado[
-            df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias"])
+            df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Sem Prazo"])
             & (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
         ]
 
@@ -423,16 +453,18 @@ if arquivo_upload is not None:
     with aba_operacional:
         st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
 
-        qtd_total_oc  = df_filtrado["ORDEM_LIMPA"].nunique()
-        qtd_atrasadas = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
-        qtd_sem_envio = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
-        qtd_vencendo  = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
+        qtd_total_oc        = df_filtrado["ORDEM_LIMPA"].nunique()
+        qtd_atrasadas       = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
+        qtd_sem_envio       = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
+        qtd_vencendo        = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
+        qtd_verba_estourada = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "PENDENTE DE APROVAÇÃO"]["ORDEM_LIMPA"].nunique()
 
-        c0, c1, c2, c3 = st.columns(4)
+        c0, c1, c2, c3, c4 = st.columns(5)
         c0.metric("📦 Total Geral de OCs Real", qtd_total_oc)
         c1.metric("🔴 OCs Atrasadas", qtd_atrasadas)
         c2.metric("🟠 Aprovadas sem Envio", qtd_sem_envio)
         c3.metric("🟡 Vencendo em até 10 dias", qtd_vencendo)
+        c4.metric("🟣 Pendentes de Aprovação", qtd_verba_estourada)
 
         st.markdown("---")
 
