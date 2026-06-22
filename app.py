@@ -1,17 +1,30 @@
-🔍 O que provavelmente aconteceu
-Causa	Probabilidade	Detalhe
-Cold start (app dormindo)	🔴 Alta	App grátis "dorme" após 7 dias sem uso. 1º acesso demora 30s-2min
-Memória estourada (1 GB)	🔴 Alta	2 sessões processando 34k linhas + apply(axis=1) = ~700 MB cada. App é morto silenciosamente
-Reprocessa tudo a cada clique	🟡 Média	Sem @st.cache_data, qualquer filtro reroda parsing + lead time
-Sessões não compartilham upload	⚠️ Importante	O comprador precisa subir o arquivo dele, não vê o seu
-⚠️ Atenção sobre o upload: cada usuário tem sua própria sessão no Streamlit. Se você subiu o Excel, o comprador não vê — ele precisa subir o arquivo dele também. Talvez seja isso que ele esteja vendo (tela de upload + spinner enquanto faz parsing).
+Passo 1 — Localize o botão "Copy" no canto do bloco de código
+Quando você vê um bloco como este na minha resposta:
 
-⚡ Solução: versão otimizada (cache + vetorização)
-Esta versão resolve 3 problemas de uma vez:
+```python
+import streamlit as st
+...
+```
+No canto superior direito do bloco existe um botão Copy (📋). Clique nele. NÃO selecione com o mouse, NÃO use Ctrl+A na página inteira.
 
-@st.cache_data → file parsing roda 1x e fica em memória. Trocar filtro vira instantâneo.
-Vetorização do lead time → substituí apply(axis=1) por operações em massa do pandas. 20-50x mais rápido, consumo de memória cai drasticamente.
-Feedback visual → barra de progresso enquanto processa.
+Passo 2 — Antes de colar, LIMPE o arquivo app.py
+Abra app.py no seu editor
+Ctrl+A (seleciona tudo)
+Delete (apaga tudo)
+O arquivo deve estar completamente vazio
+Passo 3 — Cole o código
+Ctrl+V no arquivo vazio.
+
+Passo 4 — Verifique a linha 1
+A primeira linha do arquivo DEVE ser exatamente:
+
+import streamlit as st
+Se a linha 1 tiver qualquer outra coisa (emoji, texto em português, #, 🔍, 🚀, ##, ---, etc.), está errado. Refaça do Passo 2.
+
+Passo 5 — Salve e dê commit no GitHub
+O Streamlit Cloud só atualiza depois que você faz git push ou edita pela interface do GitHub.
+
+📋 Aqui está o código novamente (use o botão Copy ↗️ no canto do bloco)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -25,6 +38,7 @@ st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
 
 st.title("🗂️ FOLLOW-UP DE COMPRAS")
 st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
+st.caption("💡 Cada usuário precisa fazer seu próprio upload do relatório. O processamento leva ~10s na primeira vez.")
 
 
 def _normalizar_nome(txt):
@@ -122,11 +136,8 @@ def parse_data_robusta(serie):
     return resultado
 
 
-# ==================================================================
-# PROCESSAMENTO COM CACHE (roda 1 unica vez por arquivo)
-# ==================================================================
-@st.cache_data(show_spinner="🔄 Processando relatório CIGAM... (1ª vez demora ~10s)")
-def processar_arquivo(file_bytes: bytes, file_name: str):
+@st.cache_data(show_spinner="Processando relatório CIGAM... (1ª vez demora ~10s)")
+def processar_arquivo(file_bytes, file_name):
     converters_padrao = {
         "ORDEM": _converter_ordem_texto,
         "Ordem": _converter_ordem_texto,
@@ -146,7 +157,6 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
     df_original.columns = [str(c).strip() for c in df_original.columns]
     df_original = df_original.dropna(how="all")
 
-    # CIGAM exporta DUAS colunas DATA: 1a = SC, 2a = OC. Renomeia a 1a para DATA_SC.
     cols_data_idx = [i for i, c in enumerate(df_original.columns)
                      if str(c).strip().upper() in {"DATA", "DATA.1"}]
     if len(cols_data_idx) >= 2:
@@ -170,13 +180,20 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
         return None, None, "Coluna 'ORDEM' não encontrada no arquivo."
 
     renames = {}
-    if col_ordem != "ORDEM": renames[col_ordem] = "ORDEM"
-    if col_controle and col_controle != "CONTROLE": renames[col_controle] = "CONTROLE"
-    if col_data and col_data != "DATA": renames[col_data] = "DATA"
-    if col_prazo and col_prazo != "DT_PRAZO_OC": renames[col_prazo] = "DT_PRAZO_OC"
-    if col_aprovacao and col_aprovacao != "DATA_APROVACAO": renames[col_aprovacao] = "DATA_APROVACAO"
-    if col_comprador and col_comprador != "COMPRADOR": renames[col_comprador] = "COMPRADOR"
-    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR": renames[col_fornecedor] = "CD_FORNECEDOR"
+    if col_ordem != "ORDEM":
+        renames[col_ordem] = "ORDEM"
+    if col_controle and col_controle != "CONTROLE":
+        renames[col_controle] = "CONTROLE"
+    if col_data and col_data != "DATA":
+        renames[col_data] = "DATA"
+    if col_prazo and col_prazo != "DT_PRAZO_OC":
+        renames[col_prazo] = "DT_PRAZO_OC"
+    if col_aprovacao and col_aprovacao != "DATA_APROVACAO":
+        renames[col_aprovacao] = "DATA_APROVACAO"
+    if col_comprador and col_comprador != "COMPRADOR":
+        renames[col_comprador] = "COMPRADOR"
+    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR":
+        renames[col_fornecedor] = "CD_FORNECEDOR"
     if renames:
         df_original = df_original.rename(columns=renames)
 
@@ -200,7 +217,6 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
                 .replace({"nan": pd.NA, "None": pd.NA, "-": pd.NA, "": pd.NA})
             )
 
-    # Conversao robusta de datas
     for c in ("DATA", "DT_PRAZO_OC", "DATA_APROVACAO"):
         if c in df_original.columns:
             df_original[c] = parse_data_robusta(limpar_data_cigam(df_original[c]))
@@ -228,10 +244,6 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
         df_original["CONTROLE_LIMPO"]
     )
 
-    # --------------------------------------------------------------
-    # LEAD TIME VETORIZADO (sem apply axis=1)
-    # 20-50x mais rapido que a versao antiga
-    # --------------------------------------------------------------
     hoje = pd.to_datetime(datetime.today().date())
     n = len(df_original)
 
@@ -278,7 +290,6 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
 
     df_original.loc[df_original["SITUACAO_PRAZO"] == "Cancelada", "STATUS_AMIGAVEL"] = "CANCELADA"
 
-    # Alerta de aprovacao travada (vetorizado)
     dias_travado = (hoje - df_original["DATA_APROVACAO"]).dt.days
     mask_vv = df_original["CONTROLE_LIMPO"].astype(str).str.upper().str.contains("VV", na=False)
     mask_travado = mask_vv & df_original["DATA_APROVACAO"].notna() & (dias_travado >= 3)
@@ -295,9 +306,6 @@ def processar_arquivo(file_bytes: bytes, file_name: str):
     return df_original, col_setor, None
 
 
-# ==================================================================
-# FLUXO PRINCIPAL
-# ==================================================================
 arquivo_upload = st.file_uploader(
     "Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"]
 )
@@ -460,11 +468,16 @@ if arquivo_upload is not None:
 
         def colorir_linhas_situacao(val):
             v = str(val)
-            if "🔴" in v: return "background-color: #FFCCCC; color: black;"
-            elif "🟡" in v: return "background-color: #FFF2CC; color: black;"
-            elif "🟢" in v: return "background-color: #D9EAD3; color: black;"
-            elif "🔵" in v: return "background-color: #E6F2FF; color: black;"
-            elif "⚫" in v: return "background-color: #EAEAEA; color: #7F7F7F;"
+            if "🔴" in v:
+                return "background-color: #FFCCCC; color: black;"
+            elif "🟡" in v:
+                return "background-color: #FFF2CC; color: black;"
+            elif "🟢" in v:
+                return "background-color: #D9EAD3; color: black;"
+            elif "🔵" in v:
+                return "background-color: #E6F2FF; color: black;"
+            elif "⚫" in v:
+                return "background-color: #EAEAEA; color: #7F7F7F;"
             return ""
 
         try:
