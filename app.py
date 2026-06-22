@@ -20,7 +20,9 @@ if arquivo_upload is not None:
         df_original = pd.read_csv(arquivo_upload, header=2, dtype={"ORDEM": str})
     else:
         # CORREÇÃO AQUI: adicionado dayfirst=True para tratar o dia/mes/ano
-        df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str}, dayfirst=True)
+        else:
+        # Apenas lemos o arquivo sem o parâmetro dayfirst
+        df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str})
     
     df_original = df_original.dropna(how='all')
     
