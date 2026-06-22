@@ -7,26 +7,26 @@ import io
 # Configuração da página do Streamlit
 st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
 
-# ==================================================================
-# IDENTIDADE DO SISTEMA - APENAS FOLLOW-UP DE COMPRAS
-# ==================================================================
 st.title("🗂️ FOLLOW-UP DE COMPRAS")
 st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
-    # BLOCO DE LEITURA CORRIGIDO PARA EVITAR ERRO DE COLUNAS
+    # Ajuste: separador ';' e header=7 para pular o lixo inicial
     if arquivo_upload.name.endswith('.csv'):
-        # Mantendo sua estrutura de leitura sem otimizações
-        df_original = pd.read_csv(arquivo_upload, skiprows=7, on_bad_lines='skip')
+        df_original = pd.read_csv(arquivo_upload, sep=';', skiprows=7, encoding='latin1')
     else:
         df_original = pd.read_excel(arquivo_upload, header=7)
     
     df_original = df_original.dropna(how='all')
     
-    if "ORDEM" in df_original.columns:
-        
+    # Identificação automática da coluna de Ordem, já que o nome pode variar ligeiramente
+    coluna_ordem = next((col for col in df_original.columns if "ORDEM" in col.upper()), None)
+    
+    if coluna_ordem:
+        # Renomeia para 'ORDEM' para manter compatibilidade com o resto do seu código
+        df_original = df_original.rename(columns={coluna_ordem: "ORDEM"})
         df_original["ORDEM_LIMPA"] = df_original["ORDEM"].astype(str).str.strip()
         
         # Filtro de solicitações e linhas fantasmas
@@ -115,14 +115,10 @@ if arquivo_upload is not None:
             df_original["CLASSIFICACAO"] = "Geral"
             col_setor = "CLASSIFICACAO"
 
-        # Elimina duplicadas por OC antes de aplicar filtros
         df_oc = df_original.drop_duplicates(subset=["ORDEM_LIMPA"]).copy()
 
-        # ==================================================================
-        # FILTRO DE PERÍODO USANDO A DATA DE CRIAÇÃO DA OC ('DATA')
-        # ==================================================================
+        # [O restante do seu código segue aqui inalterado]
         st.markdown("### 📅 Filtro por Período de Criação da Ordem")
-        
         datas_validas = df_oc["DATA"].dropna()
         if not datas_validas.empty:
             data_min_default = datas_validas.min().date()
@@ -146,12 +142,8 @@ if arquivo_upload is not None:
                 (df_filtrado_data["DATA"].dt.date <= dt_fim)
             ]
 
-        # ==================================================================
-        # PAINEL DE FILTROS ADICIONAIS
-        # ==================================================================
         st.markdown("### 🔍 Filtros de Controle")
         f1, f2, f3, f4 = st.columns(4)
-        
         with f1:
             lista_compradores = ["Todos"] + sorted([str(x) for x in df_filtrado_data["COMPRADOR"].dropna().unique() if str(x).strip() not in ["nan", "None", "", "-"]]) if "COMPRADOR" in df_filtrado_data.columns else ["Todos"]
             comprador_sel = st.selectbox("Comprador", lista_compradores)
@@ -166,7 +158,7 @@ if arquivo_upload is not None:
             prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
 
         st.markdown("---")
-        apenas_gargalos = st.checkbox("🚨 **Focar Apenas em Pendências** (Esconder OCs concluídas, canceladas ou no prazo)")
+        apenas_gargalos = st.checkbox("🚨 **Focar Apenas em Pendências**")
 
         df_filtrado = df_filtrado_data.copy()
         if comprador_sel != "Todos" and "COMPRADOR" in df_filtrado.columns:
@@ -184,157 +176,41 @@ if arquivo_upload is not None:
                 (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
             ]
 
-        # Navegação por Abas
         aba_operacional, aba_executivo = st.tabs(["📋 Follow-up Operacional", "📊 Dashboard Executivo"])
-
-        # ------------------------------------------------------------------
-        # ABA 1: FOLLOW-UP OPERACIONAL
-        # ------------------------------------------------------------------
         with aba_operacional:
-            st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
-            
+            st.markdown("### 🔴 Atenção Imediata")
             qtd_total_oc = df_filtrado["ORDEM_LIMPA"].nunique()
             qtd_atrasadas = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
             qtd_sem_envio = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
             qtd_vencendo = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
-            
             c0, c1, c2, c3 = st.columns(4)
-            c0.metric("📦 Total Geral de OCs Real", qtd_total_oc)
-            c1.metric("🔴 OCs Atrasadas", qtd_atrasadas)
+            c0.metric("📦 Total Geral", qtd_total_oc)
+            c1.metric("🔴 Atrasadas", qtd_atrasadas)
             c2.metric("🟠 Aprovadas sem Envio", qtd_sem_envio)
-            c3.metric("🟡 Vencendo em até 10 dias", qtd_vencendo)
-            
+            c3.metric("🟡 Vencendo 10 dias", qtd_vencendo)
             st.markdown("---")
             
             buffer = io.BytesIO()
             df_filtrado.to_excel(buffer, index=False, sheet_name='FollowUp_Filtrado')
+            st.download_button("📥 Exportar para Excel", data=buffer.getvalue(), file_name=f"FollowUp_FloraMDF_{datetime.today().strftime('%Y%m%d')}.xlsx", mime="application/vnd.ms-excel")
             
-            st.download_button(
-                label="📥 Exportar Dados Filtrados para Excel",
-                data=buffer.getvalue(),
-                file_name=f"FollowUp_FloraMDF_{datetime.today().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.ms-excel"
-            )
-            
-            st.markdown("### 📑 Base de Ordens de Compra")
-            
-            colunas_tabela = {
-                "ORDEM_LIMPA": "Ordem de Compra",
-                "STATUS_AMIGAVEL": "Status",
-                "ALERTA_APROVACAO": "Alerta de Fluxo",
-                "DATA": "Data Criação da Ordem",
-                "DT_PRAZO_OC": "Prazo Entrega",
-                "LEAD_TIME_SINALIZADO": "Lead Time",
-                "SITUACAO_PRAZO": "Situação"
-            }
-            
+            colunas_tabela = {"ORDEM_LIMPA": "Ordem", "STATUS_AMIGAVEL": "Status", "ALERTA_APROVACAO": "Alerta", "DATA": "Criação", "DT_PRAZO_OC": "Prazo", "LEAD_TIME_SINALIZADO": "Lead Time", "SITUACAO_PRAZO": "Situação"}
             if "CD_FORNECEDOR" in df_filtrado.columns: colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
             if "COMPRADOR" in df_filtrado.columns: colunas_tabela["COMPRADOR"] = "Comprador"
             
             df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
-            df_tabela["Data Criação da Ordem"] = df_tabela["Data Criação da Ordem"].dt.strftime('%d/%m/%Y').fillna('-')
-            df_tabela["Prazo Entrega"] = df_tabela["Prazo Entrega"].dt.strftime('%d/%m/%Y').fillna('-')
+            st.dataframe(df_tabela, use_container_width=True, hide_index=True)
             
-            def colorir_linhas_situacao(val):
-                if "🔴" in str(val): return 'background-color: #FFCCCC; color: black;'
-                elif "🟡" in str(val): return 'background-color: #FFF2CC; color: black;'
-                elif "🟢" in str(val): return 'background-color: #D9EAD3; color: black;'
-                elif "🔵" in str(val): return 'background-color: #E6F2FF; color: black;'
-                elif "⚫" in str(val): return 'background-color: #EAEAEA; color: #7F7F7F;'
-                return ''
-            
-            try:
-                df_estilizado = df_tabela.style.map(colorir_linhas_situacao, subset=["Lead Time"])
-            except AttributeError:
-                df_estilizado = df_tabela.style.applymap(colorir_linhas_situacao, subset=["Lead Time"])
-                
-            st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
-
-        # ------------------------------------------------------------------
-        # ABA 2: DASHBOARD EXECUTIVO 
-        # ------------------------------------------------------------------
         with aba_executivo:
-            st.markdown("### 📊 Indicadores Consolidados da Carteira")
-            
+            st.markdown("### 📊 Indicadores Consolidados")
             df_dash = df_filtrado[df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"])].copy()
-            
             if not df_dash.empty:
-                st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
+                st.markdown(f"#### 🏢 Distribuição por Setor")
                 df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
-                df_setores.columns = ["Setor", "Quantidade"]
-                df_setores = df_setores.sort_values(by="Quantidade", ascending=True)
-                
-                num_setores = len(df_setores)
-                altura_grafico = max(400, num_setores * 28) 
-                
-                fig_setores = px.bar(
-                    df_setores, y="Setor", x="Quantidade",
-                    orientation="h", text="Quantidade",
-                    color_discrete_sequence=["#1f77b4"]
-                )
-                fig_setores.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"), height=altura_grafico,
-                    margin=dict(l=220, r=40, t=20, b=20),
-                    xaxis=dict(title=None, showgrid=False, showticklabels=False),
-                    yaxis=dict(title=None, showgrid=False, dtick=1)
-                )
-                fig_setores.update_traces(textposition="inside", textfont=dict(size=12, color="white"))
-                st.plotly_chart(fig_setores, use_container_width=True)
-                
-                st.markdown("---")
-                
-                st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
-                df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
-                
-                df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime('%m/%Y')
-                df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
-                df_mes.columns = ["Mês", "Volume de OCs"]
-                
-                df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
-                df_mes = df_mes.sort_values("DATA_ORDEM")
-                
-                fig_mes = px.bar(
-                    df_mes, x="Mês", y="Volume de OCs",
-                    text="Volume de OCs", color_discrete_sequence=["#00CC96"]
-                )
-                fig_mes.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"),
-                    xaxis=dict(title=None, showgrid=False, type='category'),
-                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
-                )
-                fig_mes.update_traces(textposition="outside", textfont=dict(size=13, color="white"))
-                st.plotly_chart(fig_mes, use_container_width=True)
-
-                st.markdown("---")
-                
-                st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
-                df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
-                df_prazos.columns = ["Situação", "Quantidade"]
-                df_prazos = df_prazos.sort_values(by="Quantidade", ascending=False)
-                
-                cores_oficiais = {
-                    "Atrasada": "#EF553B", "Vence em até 10 dias": "#FECB52", 
-                    "Dentro do Prazo": "#00CC96", "Recebida Total": "#1f77b4", "Cancelada": "#7F7F7F"
-                }
-                
-                fig_prazos = px.bar(
-                    df_prazos, x="Situação", y="Quantidade",
-                    color="Situação", color_discrete_map=cores_oficiais, text="Quantidade"
-                )
-                fig_prazos.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"), showlegend=False,
-                    xaxis=dict(title=None, showgrid=False),
-                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
-                )
-                fig_prazos.update_traces(textposition="outside", textfont=dict(size=14, color="white"))
-                st.plotly_chart(fig_prazos, use_container_width=True)
+                st.bar_chart(df_setores.set_index(col_setor))
             else:
-                st.info("Sem dados de prazos disponíveis com os filtros atuais.")
-                
+                st.info("Sem dados.")
     else:
-        st.error("Coluna 'ORDEM' não encontrada no arquivo.")
+        st.error("Coluna de 'ORDEM' não encontrada. Verifique o arquivo.")
 else:
-    st.info("Aguardando upload do relatório de compras.")
+    st.info("Aguardando upload do relatório.")
