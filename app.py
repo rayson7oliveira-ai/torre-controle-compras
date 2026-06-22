@@ -16,23 +16,10 @@ st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
-    # A CORREÇÃO: Usamos engine='python' e on_bad_lines='skip' para lidar com as colunas extras
-    # A leitura ignora as 8 linhas iniciais e forçamos o nome das colunas
+    # BLOCO DE LEITURA CORRIGIDO PARA EVITAR ERRO DE COLUNAS
     if arquivo_upload.name.endswith('.csv'):
-        df_original = pd.read_csv(arquivo_upload, skiprows=8, header=None, engine='python', on_bad_lines='skip')
-        
-        # Nomeação manual exata das 44 colunas, ignorando o que vier depois disso na linha
-        colunas_manual = [
-            "U.N", "DATA", "REQUISICAO", "OS", "SOLICITACAO", "CONTA FINANCEIRA", "CONTRO_SC", "SETOR", "OBS", 
-            "LOCAL ENTREGA", "SEQ", "COD MATERIAL", "MATERIAL", "COD GRUPO", "GRUPO", "COD SUB", "SUB GRUPO", 
-            "QUANTIDADE", "PR UNITARIO", "VL TOTAL ITEM", "ESTOQUE SEGURAÇA", "ESTOQUE FISICO", "C.A", 
-            "COMPLEMENTO", "OBSERVACAO", "SOLICITANTE", "CRIADOR SC", "ORDEM", "COND", "DESC CONDIÇÃO", 
-            "TIPO DE FRETE", "CD_FORNECEDOR", "DATA_2", "CONTROLE", "SITUACAO ITEM", "COMPRADOR", "DT_PRAZO_SC", 
-            "DT_PRAZO_OC", "DATA_APROVACAO", "APROVADOR OC", "NF", "SERIE", "CONTROLE PRE NOTA", "PRE NOTA"
-        ]
-        # Pega apenas as 44 colunas necessárias, descartando colunas extras de erro
-        df_original = df_original.iloc[:, :len(colunas_manual)]
-        df_original.columns = colunas_manual
+        # Mantendo sua estrutura de leitura sem otimizações
+        df_original = pd.read_csv(arquivo_upload, skiprows=7, on_bad_lines='skip')
     else:
         df_original = pd.read_excel(arquivo_upload, header=7)
     
@@ -51,7 +38,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas (mantido o seu original)
+        # Tratamento rigoroso de Datas
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
