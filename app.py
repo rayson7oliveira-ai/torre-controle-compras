@@ -16,11 +16,21 @@ st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
-    # A ÚNICA ALTERAÇÃO FOI AQUI: skiprows=7 garante que a linha 8 seja o cabeçalho.
+    # A ÚNICA MUDANÇA: header=None + renomeação manual, ignorando a leitura de cabeçalho do CSV
     if arquivo_upload.name.endswith('.csv'):
-        df_original = pd.read_csv(arquivo_upload, skiprows=7, dtype={"ORDEM": str})
+        df_original = pd.read_csv(arquivo_upload, skiprows=8, header=None)
+        # O CIGAM tem colunas específicas. Aqui renomeamos a coluna da ORDEM (Índice 27)
+        # Ajuste o mapeamento abaixo se a coluna ORDEM não for a 28ª (índice 27)
+        df_original.columns = [
+            "U.N", "DATA", "REQUISICAO", "OS", "SOLICITACAO", "CONTA FINANCEIRA", "CONTRO_SC", "SETOR", "OBS", 
+            "LOCAL ENTREGA", "SEQ", "COD MATERIAL", "MATERIAL", "COD GRUPO", "GRUPO", "COD SUB", "SUB GRUPO", 
+            "QUANTIDADE", "PR UNITARIO", "VL TOTAL ITEM", "ESTOQUE SEGURAÇA", "ESTOQUE FISICO", "C.A", 
+            "COMPLEMENTO", "OBSERVACAO", "SOLICITANTE", "CRIADOR SC", "ORDEM", "COND", "DESC CONDIÇÃO", 
+            "TIPO DE FRETE", "CD_FORNECEDOR", "DATA_2", "CONTROLE", "SITUACAO ITEM", "COMPRADOR", "DT_PRAZO_SC", 
+            "DT_PRAZO_OC", "DATA_APROVACAO", "APROVADOR OC", "NF", "SERIE", "CONTROLE PRE NOTA", "PRE NOTA"
+        ]
     else:
-        df_original = pd.read_excel(arquivo_upload, header=7, dtype={"ORDEM": str})
+        df_original = pd.read_excel(arquivo_upload, header=7)
     
     df_original = df_original.dropna(how='all')
     
@@ -37,7 +47,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas (mantido o seu original)
+        # Tratamento rigoroso de Datas
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
@@ -334,6 +344,6 @@ if arquivo_upload is not None:
                 st.info("Sem dados de prazos disponíveis com os filtros atuais.")
                 
     else:
-        st.error("Coluna 'ORDEM' não encontrada no arquivo.")
+        st.error("Coluna 'ORDEM' não encontrada no arquivo. Verifique se o mapeamento de nomes das colunas está correto.")
 else:
     st.info("Aguardando upload do relatório de compras.")
