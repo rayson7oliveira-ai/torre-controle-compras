@@ -10,7 +10,7 @@ st.title("🗂️ CENTRAL OPERACIONAL DE COMPRAS")
 def processar_dados(df):
     hoje = datetime.now()
     
-    # 1. Tradução do Status
+    # 1. Tradução do Status (Baseado na coluna CONTROLE)
     def traduzir_status(controle):
         c = str(controle)
         if "20" in c: return "APROVADA SEM ENVIO"
@@ -28,10 +28,10 @@ def processar_dados(df):
     
     # 3. Definição de Prioridade (1 = Alta, 2 = Média, 3 = Baixa)
     def definir_prioridade(row):
-        # Atrasadas ou Pendentes de envio são Prioridade 1
+        # Prioridade Alta: Atrasadas ou Aprovadas sem envio (excluindo Recebida Total)
         if (row["DIAS_RESTANTES"] < 0 or row["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO") and row["STATUS_AMIGAVEL"] != "RECEBIDA TOTAL": 
             return 1
-        return 3 # Tudo que já foi recebido ou está em curso é prioridade baixa
+        return 3 
     
     df["PRIORIDADE"] = df.apply(definir_prioridade, axis=1)
     return df.sort_values(by=["PRIORIDADE", "DIAS_RESTANTES"])
@@ -43,7 +43,13 @@ if arquivo_upload:
     try:
         # Leitura e Limpeza Inicial
         df = pd.read_excel(arquivo_upload, skiprows=7)
-        df = df[df['ORDEM'].notna() & ~df['ORDEM'].astype(str).str.contains('SC:')]
+        
+        # Correção da coluna: Renomeia NUMERO_OC para ORDEM para padronizar
+        if "NUMERO_OC" in df.columns:
+            df = df.rename(columns={"NUMERO_OC": "ORDEM"})
+            
+        # Limpeza: Remove linhas vazias e as que contêm "SC:"
+        df = df[df['ORDEM'].notna() & ~df['ORDEM'].astype(str).str.contains('SC:', na=False)]
         df = df.drop_duplicates(subset=['ORDEM'])
         
         df = processar_dados(df)
@@ -53,6 +59,7 @@ if arquivo_upload:
         focar_pendencias = st.sidebar.checkbox("🚨 Focar apenas em Ações Necessárias")
         busca_ordem = st.sidebar.text_input("Buscar pelo número da Ordem:")
         
+        # Aplicar Filtros
         if focar_pendencias:
             df = df[df["PRIORIDADE"] == 1]
         if busca_ordem:
