@@ -16,15 +16,12 @@ st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
+    # LEITURA CORRIGIDA: 
+    # O arquivo tem o cabeçalho na linha 7 (index 7).
     if arquivo_upload.name.endswith('.csv'):
-        df_original = pd.read_csv(arquivo_upload, sep=';', skiprows=7, encoding='latin1')
+        df_original = pd.read_csv(arquivo_upload, skiprows=7, encoding='latin1')
     else:
         df_original = pd.read_excel(arquivo_upload, header=7)
-    
-    # CORREÇÃO PARA O NOME DA COLUNA: 
-    # O arquivo usa "ORDEM DE COMPRA". Vamos renomear para "ORDEM" para seu código funcionar.
-    if "ORDEM DE COMPRA" in df_original.columns:
-        df_original = df_original.rename(columns={"ORDEM DE COMPRA": "ORDEM"})
     
     df_original = df_original.dropna(how='all')
     
@@ -41,7 +38,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas
+        # Tratamento rigoroso de Datas (mantido o seu original)
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
