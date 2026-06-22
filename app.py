@@ -1,8 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from datetime import datetime
 import plotly.express as px
 import io
+import re
+import unicodedata
 
 # Configuração da página do Streamlit
 st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
@@ -13,327 +16,557 @@ st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
 st.title("🗂️ FOLLOW-UP DE COMPRAS")
 st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 
-arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
+# ==================================================================
+# HELPERS DE LEITURA E LIMPEZA (CORREÇÕES CIGAM)
+# ==================================================================
+
+def _normalizar_nome(txt: str) -> str:
+    """Remove acentos, espaços extras e deixa em UPPER para comparação."""
+    if txt is None:
+        return ""
+    s = str(txt).strip().upper()
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def find_col(df: pd.DataFrame, candidatos):
+    """
+    Localiza a coluna real do DataFrame a partir de uma lista de nomes
+    candidatos (case/acento/espaço-insensível). Aceita match exato e parcial.
+    Retorna o nome ORIGINAL da coluna ou None.
+    """
+    norm_map = {_normalizar_nome(c): c for c in df.columns}
+
+    # 1) Match exato (normalizado)
+    for cand in candidatos:
+        n = _normalizar_nome(cand)
+        if n in norm_map:
+            return norm_map[n]
+
+    # 2) Match parcial (contém)
+    for cand in candidatos:
+        n = _normalizar_nome(cand)
+        for k_norm, k_orig in norm_map.items():
+            if n and n in k_norm:
+                return k_orig
+    return None
+
+
+def _converter_ordem_texto(valor):
+    """
+    Converter usado no read_excel/read_csv para preservar a coluna ORDEM
+    como texto, evitando perda de zeros à esquerda na inferência de tipo.
+    """
+    if valor is None:
+        return ""
+    s = str(valor).strip()
+    if s.lower() in {"nan", "none", "nat"}:
+        return ""
+    # Se vier como "66723.0" (float do Excel), remove o ".0"
+    if re.fullmatch(r"-?\d+\.0+", s):
+        s = s.split(".")[0]
+    return s
+
+
+def _padronizar_ordem(serie: pd.Series) -> pd.Series:
+    """
+    Restaura zeros à esquerda quando o Excel já entregou o número sem o zero.
+    Usa o comprimento MÁXIMO observado na coluna como referência (>=4 dígitos),
+    evitando padding artificial em códigos curtos legítimos.
+    """
+    s = serie.astype(str).str.strip()
+    # Apenas dígitos puros são candidatos a padding
+    apenas_digitos = s.str.fullmatch(r"\d+")
+    if apenas_digitos.any():
+        comprimentos = s[apenas_digitos].str.len()
+        largura_alvo = int(comprimentos.max()) if not comprimentos.empty else 0
+        if largura_alvo >= 4:
+            s = s.where(~apenas_digitos, s.str.zfill(largura_alvo))
+    return s
+
+
+def parse_data_robusta(serie: pd.Series) -> pd.Series:
+    """
+    Conversão de datas tolerante ao locale do Windows do usuário.
+    Cascata:
+      1) Se já for datetime, retorna.
+      2) Tenta pd.to_datetime nativo (dayfirst=True).
+      3) Para os NaT remanescentes, tenta formatos explícitos comuns.
+      4) Para os NaT remanescentes que parecem número, trata como
+         serial do Excel (origin 1899-12-30).
+    """
+    if serie is None:
+        return pd.Series(pd.NaT, index=[])
+
+    # 1) Já é datetime?
+    if pd.api.types.is_datetime64_any_dtype(serie):
+        resultado = pd.to_datetime(serie, errors="coerce")
+    else:
+        # 2) Conversão geral (dayfirst para padrão BR, mas tolerante)
+        resultado = pd.to_datetime(serie, errors="coerce", dayfirst=True)
+
+    # 3) Tentar formatos explícitos para os que falharam
+    mask_nat = resultado.isna() & serie.notna()
+    if mask_nat.any():
+        textos = serie[mask_nat].astype(str).str.strip()
+        formatos = [
+            "%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y",
+            "%Y-%m-%d", "%Y/%m/%d",
+            "%d/%m/%y", "%d-%m-%y",
+            "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S",
+        ]
+        for fmt in formatos:
+            if not mask_nat.any():
+                break
+            parsed = pd.to_datetime(textos, format=fmt, errors="coerce")
+            ok = parsed.notna()
+            if ok.any():
+                resultado.loc[parsed.index[ok]] = parsed[ok]
+                mask_nat = resultado.isna() & serie.notna()
+                textos = serie[mask_nat].astype(str).str.strip()
+
+    # 4) Serial do Excel (número de dias desde 1899-12-30)
+    mask_nat = resultado.isna() & serie.notna()
+    if mask_nat.any():
+        numeros = pd.to_numeric(serie[mask_nat], errors="coerce")
+        validos = numeros.dropna()
+        # Faixa razoável de seriais (entre 1990 e 2070 aprox.)
+        validos = validos[(validos > 32000) & (validos < 80000)]
+        if not validos.empty:
+            datas_excel = pd.to_datetime(
+                validos, origin="1899-12-30", unit="D", errors="coerce"
+            )
+            resultado.loc[datas_excel.index] = datas_excel
+
+    # Limpeza de datas inválidas (epoch / 1970 indica conversão errada)
+    resultado = pd.to_datetime(resultado, errors="coerce")
+    resultado.loc[resultado.dt.year <= 1970] = pd.NaT
+    return resultado
+
+
+# ==================================================================
+# UPLOAD
+# ==================================================================
+arquivo_upload = st.file_uploader(
+    "Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"]
+)
 
 if arquivo_upload is not None:
-    if arquivo_upload.name.endswith('.csv'):
-        df_original = pd.read_csv(arquivo_upload, header=2, dtype={"ORDEM": str})
-    else:
-        # AQUI FOI REMOVIDO APENAS O dayfirst=True DO READ_EXCEL PARA NÃO DAR ERRO DE SINTAXE
-        df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str})
-    
-    df_original = df_original.dropna(how='all')
-    
-    if "ORDEM" in df_original.columns:
-        
-        df_original["ORDEM_LIMPA"] = df_original["ORDEM"].astype(str).str.strip()
-        
-        # Filtro de solicitações e linhas fantasmas
-        df_original = df_original[~df_original["ORDEM_LIMPA"].isin(["0", "0.0", "", "nan", "None", "-", "ORDEM"])].copy()
-        
-        if "CONTROLE" in df_original.columns:
-            df_original = df_original[df_original["CONTROLE"].astype(str).str.strip().notna()]
-            df_original = df_original[~df_original["CONTROLE"].astype(str).str.strip().isin(["nan", "None", "", "-"])]
-        
-        df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
-        
-        # Tratamento rigoroso de Datas (mantido o seu original)
-        df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
-        df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
-        df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
-        
-        df_original.loc[df_original["DATA"].dt.year <= 1970, "DATA"] = pd.NaT
-        df_original.loc[df_original["DT_PRAZO_OC"].dt.year <= 1970, "DT_PRAZO_OC"] = pd.NaT
-        df_original.loc[df_original["DATA_APROVACAO"].dt.year <= 1970, "DATA_APROVACAO"] = pd.NaT
+    # ------------------------------------------------------------------
+    # LEITURA TOLERANTE: tudo como texto + converter específico p/ ORDEM
+    # ------------------------------------------------------------------
+    converters_padrao = {
+        "ORDEM": _converter_ordem_texto,
+        "Ordem": _converter_ordem_texto,
+        "ordem": _converter_ordem_texto,
+    }
 
-        hoje = pd.to_datetime(datetime.today().date())
-        
-        # Mapeamento de Status
-        df_original["CONTROLE_LIMPO"] = df_original["CONTROLE"].astype(str).str.strip()
-        mapa_status = {
-            "20 - APROVADO": "APROVADA SEM ENVIO",
-            "40 - ENVIADO EMAIL": "ENVIADA AO FORNECEDOR",
-            "35 - RECEBIDA - TOTAL": "RECEBIDA TOTAL",
-            "VV - VERBA ULTRAPASSADA": "AGUARDANDO APROVAÇÃO",
-            "90 - CANCELADO": "CANCELADA",
-            "90 - CANCELADA": "CANCELADA",
-            "20": "APROVADA SEM ENVIO",
-            "40": "ENVIADA AO FORNECEDOR",
-            "35": "RECEBIDA TOTAL",
-            "VV": "AGUARDANDO APROVAÇÃO",
-            "90": "CANCELADA"
-        }
-        df_original["STATUS_AMIGAVEL"] = df_original["CONTROLE_LIMPO"].map(mapa_status).fillna(df_original["CONTROLE_LIMPO"])
-
-        # Cálculo do Lead Time
-        def calcular_lead_time_flora(linha):
-            if "CANCELADA" in str(linha["STATUS_AMIGAVEL"]).upper() or "90" in str(linha["CONTROLE_LIMPO"]):
-                return 888, "Cancelada", "⚫ Cancelada"
-            if linha["STATUS_AMIGAVEL"] == "RECEBIDA TOTAL":
-                return 999, "Recebida Total", "🔵 Recebida Total"
-                
-            prazo = linha["DT_PRAZO_OC"]
-            if pd.isna(prazo):
-                return pd.NA, "Sem Prazo", "⚪ Sem Prazo"
-            
-            lead_time = (prazo - hoje).days
-            if lead_time < 0:
-                return lead_time, "Atrasada", f"🔴 {lead_time} dias"
-            elif 0 <= lead_time <= 10:
-                return lead_time, "Vence em até 10 dias", f"🟡 +{lead_time} dias"
-            else:
-                return lead_time, "Dentro do Prazo", f"🟢 +{lead_time} dias"
-
-        resultados = df_original.apply(calcular_lead_time_flora, axis=1)
-        df_original["LEAD_TIME_NUMERICO"] = [r[0] for r in resultados]
-        df_original["SITUACAO_PRAZO"] = [r[1] for r in resultados]
-        df_original["LEAD_TIME_SINALIZADO"] = [r[2] for r in resultados]
-
-        df_original.loc[df_original["SITUACAO_PRAZO"] == "Cancelada", "STATUS_AMIGAVEL"] = "CANCELADA"
-
-        # Identificar dias parados na aprovação
-        def calcular_dias_travados(linha):
-            if "AGUARDANDO APROVAÇÃO" in str(linha["STATUS_AMIGAVEL"]).upper() and not pd.isna(linha["DATA_APROVACAO"]):
-                dias = (hoje - linha["DATA_APROVACAO"]).days
-                if dias >= 3:
-                    return f"⚠️ Travado há {dias} dias!"
-            return "Ok"
-        df_original["ALERTA_APROVACAO"] = df_original.apply(calcular_dias_travados, axis=1)
-
-        col_setor = None
-        for col in df_original.columns:
-            if "SETOR" in str(col).upper():
-                col_setor = col
-                break
-        if col_setor is None:
-            for col in df_original.columns:
-                if "GRUPO" in str(col).upper():
-                    col_setor = col
-                    break
-        if col_setor is None:
-            df_original["CLASSIFICACAO"] = "Geral"
-            col_setor = "CLASSIFICACAO"
-
-        # Elimina duplicadas por OC antes de aplicar filtros
-        df_oc = df_original.drop_duplicates(subset=["ORDEM_LIMPA"]).copy()
-
-        # ==================================================================
-        # FILTRO DE PERÍODO USANDO A DATA DE CRIAÇÃO DA OC ('DATA')
-        # ==================================================================
-        st.markdown("### 📅 Filtro por Período de Criação da Ordem")
-        
-        datas_validas = df_oc["DATA"].dropna()
-        if not datas_validas.empty:
-            data_min_default = datas_validas.min().date()
-            data_max_default = datas_validas.max().date()
+    try:
+        if arquivo_upload.name.lower().endswith(".csv"):
+            df_original = pd.read_csv(
+                arquivo_upload,
+                header=2,
+                dtype=str,                      # tudo como texto p/ preservar formatação
+                converters=converters_padrao,   # garante ORDEM como string limpa
+                keep_default_na=False,
+                na_values=["", "nan", "NaN", "None", "NaT", "-"],
+            )
         else:
-            data_min_default = datetime.today().date()
-            data_max_default = datetime.today().date()
-            
-        periodo_selecionado = st.date_input(
-            "Selecione o intervalo de datas (Data Inicial e Data Final):",
-            value=(data_min_default, data_max_default),
-            min_value=datetime(2000, 1, 1).date(),
-            max_value=datetime(2050, 12, 31).date()
-        )
-        
-        df_filtrado_data = df_oc.copy()
-        if isinstance(periodo_selecionado, tuple) and len(periodo_selecionado) == 2:
-            dt_inicio, dt_fim = periodo_selecionado
-            df_filtrado_data = df_filtrado_data[
-                (df_filtrado_data["DATA"].dt.date >= dt_inicio) & 
-                (df_filtrado_data["DATA"].dt.date <= dt_fim)
-            ]
+            df_original = pd.read_excel(
+                arquivo_upload,
+                header=2,
+                dtype=str,
+                converters=converters_padrao,
+                keep_default_na=False,
+                na_values=["", "nan", "NaN", "None", "NaT", "-"],
+            )
+    except Exception as e:
+        st.error(f"Erro ao ler o arquivo: {e}")
+        st.stop()
 
-        # ==================================================================
-        # PAINEL DE FILTROS ADICIONAIS
-        # ==================================================================
-        st.markdown("### 🔍 Filtros de Controle")
-        f1, f2, f3, f4 = st.columns(4)
-        
-        with f1:
-            lista_compradores = ["Todos"] + sorted([str(x) for x in df_filtrado_data["COMPRADOR"].dropna().unique() if str(x).strip() not in ["nan", "None", "", "-"]]) if "COMPRADOR" in df_filtrado_data.columns else ["Todos"]
-            comprador_sel = st.selectbox("Comprador", lista_compradores)
-        with f2:
-            lista_status = ["Todos"] + sorted([str(x) for x in df_filtrado_data["STATUS_AMIGAVEL"].dropna().unique() if str(x).strip() not in ["nan", "None", "", "-"]])
-            status_sel = st.selectbox("Status", lista_status)
-        with f3:
-            lista_fornecedores = ["Todos"] + sorted([str(x) for x in df_filtrado_data["CD_FORNECEDOR"].dropna().unique() if str(x).strip() not in ["nan", "None", "", "-"]]) if "CD_FORNECEDOR" in df_filtrado_data.columns else ["Todos"]
-            fornecedor_sel = st.selectbox("Fornecedor", lista_fornecedores)
-        with f4:
-            lista_prazos = ["Todos", "Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Sem Prazo", "Recebida Total", "Cancelada"]
-            prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
+    # Normaliza nomes de colunas (remove espaços invisíveis no header)
+    df_original.columns = [str(c).strip() for c in df_original.columns]
+
+    # Remove linhas totalmente vazias
+    df_original = df_original.dropna(how="all")
+
+    # ------------------------------------------------------------------
+    # DETECÇÃO RESILIENTE DAS COLUNAS-CHAVE
+    # ------------------------------------------------------------------
+    col_ordem        = find_col(df_original, ["ORDEM", "ORDEM_OC", "NUM_ORDEM", "OC", "NUMERO ORDEM"])
+    col_controle     = find_col(df_original, ["CONTROLE", "STATUS", "SITUACAO"])
+    col_data         = find_col(df_original, ["DATA", "DATA_CRIACAO", "DT_CRIACAO", "DATA EMISSAO", "DT_EMISSAO"])
+    col_prazo        = find_col(df_original, ["DT_PRAZO_OC", "PRAZO", "DT_PRAZO", "DATA_PRAZO", "PRAZO_ENTREGA"])
+    col_aprovacao    = find_col(df_original, ["DATA_APROVACAO", "DT_APROVACAO", "APROVACAO"])
+    col_comprador    = find_col(df_original, ["COMPRADOR", "USUARIO", "RESPONSAVEL"])
+    col_fornecedor   = find_col(df_original, ["CD_FORNECEDOR", "FORNECEDOR", "COD_FORNECEDOR"])
+
+    if not col_ordem:
+        st.error("Coluna 'ORDEM' não encontrada no arquivo.")
+        st.stop()
+
+    # Padroniza o nome da coluna ORDEM para o resto do código funcionar
+    if col_ordem != "ORDEM":
+        df_original = df_original.rename(columns={col_ordem: "ORDEM"})
+    if col_controle and col_controle != "CONTROLE":
+        df_original = df_original.rename(columns={col_controle: "CONTROLE"})
+    if col_data and col_data != "DATA":
+        df_original = df_original.rename(columns={col_data: "DATA"})
+    if col_prazo and col_prazo != "DT_PRAZO_OC":
+        df_original = df_original.rename(columns={col_prazo: "DT_PRAZO_OC"})
+    if col_aprovacao and col_aprovacao != "DATA_APROVACAO":
+        df_original = df_original.rename(columns={col_aprovacao: "DATA_APROVACAO"})
+    if col_comprador and col_comprador != "COMPRADOR":
+        df_original = df_original.rename(columns={col_comprador: "COMPRADOR"})
+    if col_fornecedor and col_fornecedor != "CD_FORNECEDOR":
+        df_original = df_original.rename(columns={col_fornecedor: "CD_FORNECEDOR"})
+
+    # ------------------------------------------------------------------
+    # TRATAMENTO DA COLUNA ORDEM (preserva zeros à esquerda)
+    # ------------------------------------------------------------------
+    df_original["ORDEM_LIMPA"] = _padronizar_ordem(df_original["ORDEM"]).str.strip()
+
+    # Filtro de solicitações e linhas fantasmas
+    df_original = df_original[
+        ~df_original["ORDEM_LIMPA"].isin(["0", "0.0", "", "nan", "None", "-", "ORDEM"])
+    ].copy()
+
+    if "CONTROLE" in df_original.columns:
+        df_original = df_original[df_original["CONTROLE"].astype(str).str.strip().notna()]
+        df_original = df_original[
+            ~df_original["CONTROLE"].astype(str).str.strip().isin(["nan", "None", "", "-"])
+        ]
+
+    df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
+
+    # ------------------------------------------------------------------
+    # CONVERSÃO ROBUSTA DE DATAS (independe do locale)
+    # ------------------------------------------------------------------
+    if "DATA" in df_original.columns:
+        df_original["DATA"] = parse_data_robusta(df_original["DATA"])
+    else:
+        df_original["DATA"] = pd.NaT
+
+    if "DT_PRAZO_OC" in df_original.columns:
+        df_original["DT_PRAZO_OC"] = parse_data_robusta(df_original["DT_PRAZO_OC"])
+    else:
+        df_original["DT_PRAZO_OC"] = pd.NaT
+
+    if "DATA_APROVACAO" in df_original.columns:
+        df_original["DATA_APROVACAO"] = parse_data_robusta(df_original["DATA_APROVACAO"])
+    else:
+        df_original["DATA_APROVACAO"] = pd.NaT
+
+    hoje = pd.to_datetime(datetime.today().date())
+
+    # ------------------------------------------------------------------
+    # MAPEAMENTO DE STATUS (igual ao original)
+    # ------------------------------------------------------------------
+    df_original["CONTROLE_LIMPO"] = df_original["CONTROLE"].astype(str).str.strip() \
+        if "CONTROLE" in df_original.columns else ""
+    mapa_status = {
+        "20 - APROVADO": "APROVADA SEM ENVIO",
+        "40 - ENVIADO EMAIL": "ENVIADA AO FORNECEDOR",
+        "35 - RECEBIDA - TOTAL": "RECEBIDA TOTAL",
+        "VV - VERBA ULTRAPASSADA": "AGUARDANDO APROVAÇÃO",
+        "90 - CANCELADO": "CANCELADA",
+        "90 - CANCELADA": "CANCELADA",
+        "20": "APROVADA SEM ENVIO",
+        "40": "ENVIADA AO FORNECEDOR",
+        "35": "RECEBIDA TOTAL",
+        "VV": "AGUARDANDO APROVAÇÃO",
+        "90": "CANCELADA",
+    }
+    df_original["STATUS_AMIGAVEL"] = df_original["CONTROLE_LIMPO"].map(mapa_status).fillna(
+        df_original["CONTROLE_LIMPO"]
+    )
+
+    # ------------------------------------------------------------------
+    # CÁLCULO DE LEAD TIME (igual ao original)
+    # ------------------------------------------------------------------
+    def calcular_lead_time_flora(linha):
+        if "CANCELADA" in str(linha["STATUS_AMIGAVEL"]).upper() or "90" in str(linha["CONTROLE_LIMPO"]):
+            return 888, "Cancelada", "⚫ Cancelada"
+        if linha["STATUS_AMIGAVEL"] == "RECEBIDA TOTAL":
+            return 999, "Recebida Total", "🔵 Recebida Total"
+
+        prazo = linha["DT_PRAZO_OC"]
+        if pd.isna(prazo):
+            return pd.NA, "Sem Prazo", "⚪ Sem Prazo"
+
+        lead_time = (prazo - hoje).days
+        if lead_time < 0:
+            return lead_time, "Atrasada", f"🔴 {lead_time} dias"
+        elif 0 <= lead_time <= 10:
+            return lead_time, "Vence em até 10 dias", f"🟡 +{lead_time} dias"
+        else:
+            return lead_time, "Dentro do Prazo", f"🟢 +{lead_time} dias"
+
+    resultados = df_original.apply(calcular_lead_time_flora, axis=1)
+    df_original["LEAD_TIME_NUMERICO"]   = [r[0] for r in resultados]
+    df_original["SITUACAO_PRAZO"]       = [r[1] for r in resultados]
+    df_original["LEAD_TIME_SINALIZADO"] = [r[2] for r in resultados]
+
+    df_original.loc[df_original["SITUACAO_PRAZO"] == "Cancelada", "STATUS_AMIGAVEL"] = "CANCELADA"
+
+    # ------------------------------------------------------------------
+    # ALERTA DE APROVAÇÃO TRAVADA
+    # ------------------------------------------------------------------
+    def calcular_dias_travados(linha):
+        if "AGUARDANDO APROVAÇÃO" in str(linha["STATUS_AMIGAVEL"]).upper() and not pd.isna(linha["DATA_APROVACAO"]):
+            dias = (hoje - linha["DATA_APROVACAO"]).days
+            if dias >= 3:
+                return f"⚠️ Travado há {dias} dias!"
+        return "Ok"
+    df_original["ALERTA_APROVACAO"] = df_original.apply(calcular_dias_travados, axis=1)
+
+    # ------------------------------------------------------------------
+    # DETECÇÃO DA COLUNA DE SETOR/GRUPO
+    # ------------------------------------------------------------------
+    col_setor = find_col(df_original, ["SETOR"]) or find_col(df_original, ["GRUPO"])
+    if col_setor is None:
+        df_original["CLASSIFICACAO"] = "Geral"
+        col_setor = "CLASSIFICACAO"
+
+    # Elimina duplicadas por OC antes de aplicar filtros
+    df_oc = df_original.drop_duplicates(subset=["ORDEM_LIMPA"]).copy()
+
+    # ==================================================================
+    # FILTRO DE PERÍODO USANDO A DATA DE CRIAÇÃO DA OC ('DATA')
+    # ==================================================================
+    st.markdown("### 📅 Filtro por Período de Criação da Ordem")
+
+    datas_validas = df_oc["DATA"].dropna()
+    if not datas_validas.empty:
+        data_min_default = datas_validas.min().date()
+        data_max_default = datas_validas.max().date()
+    else:
+        data_min_default = datetime.today().date()
+        data_max_default = datetime.today().date()
+
+    periodo_selecionado = st.date_input(
+        "Selecione o intervalo de datas (Data Inicial e Data Final):",
+        value=(data_min_default, data_max_default),
+        min_value=datetime(2000, 1, 1).date(),
+        max_value=datetime(2050, 12, 31).date(),
+    )
+
+    df_filtrado_data = df_oc.copy()
+    if isinstance(periodo_selecionado, tuple) and len(periodo_selecionado) == 2:
+        dt_inicio, dt_fim = periodo_selecionado
+        df_filtrado_data = df_filtrado_data[
+            (df_filtrado_data["DATA"].dt.date >= dt_inicio)
+            & (df_filtrado_data["DATA"].dt.date <= dt_fim)
+        ]
+
+    # ==================================================================
+    # PAINEL DE FILTROS ADICIONAIS
+    # ==================================================================
+    st.markdown("### 🔍 Filtros de Controle")
+    f1, f2, f3, f4 = st.columns(4)
+
+    with f1:
+        lista_compradores = (
+            ["Todos"] + sorted(
+                [str(x) for x in df_filtrado_data["COMPRADOR"].dropna().unique()
+                 if str(x).strip() not in ["nan", "None", "", "-"]]
+            ) if "COMPRADOR" in df_filtrado_data.columns else ["Todos"]
+        )
+        comprador_sel = st.selectbox("Comprador", lista_compradores)
+    with f2:
+        lista_status = ["Todos"] + sorted(
+            [str(x) for x in df_filtrado_data["STATUS_AMIGAVEL"].dropna().unique()
+             if str(x).strip() not in ["nan", "None", "", "-"]]
+        )
+        status_sel = st.selectbox("Status", lista_status)
+    with f3:
+        lista_fornecedores = (
+            ["Todos"] + sorted(
+                [str(x) for x in df_filtrado_data["CD_FORNECEDOR"].dropna().unique()
+                 if str(x).strip() not in ["nan", "None", "", "-"]]
+            ) if "CD_FORNECEDOR" in df_filtrado_data.columns else ["Todos"]
+        )
+        fornecedor_sel = st.selectbox("Fornecedor", lista_fornecedores)
+    with f4:
+        lista_prazos = ["Todos", "Atrasada", "Vence em até 10 dias", "Dentro do Prazo",
+                        "Sem Prazo", "Recebida Total", "Cancelada"]
+        prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
+
+    st.markdown("---")
+    apenas_gargalos = st.checkbox(
+        "🚨 **Focar Apenas em Pendências** (Esconder OCs concluídas, canceladas ou no prazo)"
+    )
+
+    df_filtrado = df_filtrado_data.copy()
+    if comprador_sel != "Todos" and "COMPRADOR" in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado["COMPRADOR"] == comprador_sel]
+    if status_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == status_sel]
+    if fornecedor_sel != "Todos" and "CD_FORNECEDOR" in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado["CD_FORNECEDOR"] == fornecedor_sel]
+    if prazo_sel != "Todos":
+        df_filtrado = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == prazo_sel]
+
+    if apenas_gargalos:
+        df_filtrado = df_filtrado[
+            df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias"])
+            & (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
+        ]
+
+    # Navegação por Abas
+    aba_operacional, aba_executivo = st.tabs(["📋 Follow-up Operacional", "📊 Dashboard Executivo"])
+
+    # ------------------------------------------------------------------
+    # ABA 1: FOLLOW-UP OPERACIONAL
+    # ------------------------------------------------------------------
+    with aba_operacional:
+        st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
+
+        qtd_total_oc  = df_filtrado["ORDEM_LIMPA"].nunique()
+        qtd_atrasadas = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
+        qtd_sem_envio = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
+        qtd_vencendo  = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
+
+        c0, c1, c2, c3 = st.columns(4)
+        c0.metric("📦 Total Geral de OCs Real", qtd_total_oc)
+        c1.metric("🔴 OCs Atrasadas", qtd_atrasadas)
+        c2.metric("🟠 Aprovadas sem Envio", qtd_sem_envio)
+        c3.metric("🟡 Vencendo em até 10 dias", qtd_vencendo)
 
         st.markdown("---")
-        apenas_gargalos = st.checkbox("🚨 **Focar Apenas em Pendências** (Esconder OCs concluídas, canceladas ou no prazo)")
 
-        df_filtrado = df_filtrado_data.copy()
-        if comprador_sel != "Todos" and "COMPRADOR" in df_filtrado.columns:
-            df_filtrado = df_filtrado[df_filtrado["COMPRADOR"] == comprador_sel]
-        if status_sel != "Todos":
-            df_filtrado = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == status_sel]
-        if fornecedor_sel != "Todos" and "CD_FORNECEDOR" in df_filtrado.columns:
-            df_filtrado = df_filtrado[df_filtrado["CD_FORNECEDOR"] == fornecedor_sel]
-        if prazo_sel != "Todos":
-            df_filtrado = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == prazo_sel]
+        buffer = io.BytesIO()
+        df_filtrado.to_excel(buffer, index=False, sheet_name="FollowUp_Filtrado")
 
-        if apenas_gargalos:
-            df_filtrado = df_filtrado[
-                df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias"]) & 
-                (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
-            ]
+        st.download_button(
+            label="📥 Exportar Dados Filtrados para Excel",
+            data=buffer.getvalue(),
+            file_name=f"FollowUp_FloraMDF_{datetime.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.ms-excel",
+        )
 
-        # Navegação por Abas
-        aba_operacional, aba_executivo = st.tabs(["📋 Follow-up Operacional", "📊 Dashboard Executivo"])
+        st.markdown("### 📑 Base de Ordens de Compra")
 
-        # ------------------------------------------------------------------
-        # ABA 1: FOLLOW-UP OPERACIONAL
-        # ------------------------------------------------------------------
-        with aba_operacional:
-            st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
-            
-            qtd_total_oc = df_filtrado["ORDEM_LIMPA"].nunique()
-            qtd_atrasadas = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
-            qtd_sem_envio = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
-            qtd_vencendo = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
-            
-            c0, c1, c2, c3 = st.columns(4)
-            c0.metric("📦 Total Geral de OCs Real", qtd_total_oc)
-            c1.metric("🔴 OCs Atrasadas", qtd_atrasadas)
-            c2.metric("🟠 Aprovadas sem Envio", qtd_sem_envio)
-            c3.metric("🟡 Vencendo em até 10 dias", qtd_vencendo)
-            
-            st.markdown("---")
-            
-            buffer = io.BytesIO()
-            df_filtrado.to_excel(buffer, index=False, sheet_name='FollowUp_Filtrado')
-            
-            st.download_button(
-                label="📥 Exportar Dados Filtrados para Excel",
-                data=buffer.getvalue(),
-                file_name=f"FollowUp_FloraMDF_{datetime.today().strftime('%Y%m%d')}.xlsx",
-                mime="application/vnd.ms-excel"
+        colunas_tabela = {
+            "ORDEM_LIMPA": "Ordem de Compra",
+            "STATUS_AMIGAVEL": "Status",
+            "ALERTA_APROVACAO": "Alerta de Fluxo",
+            "DATA": "Data Criação da Ordem",
+            "DT_PRAZO_OC": "Prazo Entrega",
+            "LEAD_TIME_SINALIZADO": "Lead Time",
+            "SITUACAO_PRAZO": "Situação",
+        }
+
+        if "CD_FORNECEDOR" in df_filtrado.columns: colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
+        if "COMPRADOR" in df_filtrado.columns:   colunas_tabela["COMPRADOR"]    = "Comprador"
+
+        df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
+        df_tabela["Data Criação da Ordem"] = df_tabela["Data Criação da Ordem"].dt.strftime("%d/%m/%Y").fillna("-")
+        df_tabela["Prazo Entrega"]         = df_tabela["Prazo Entrega"].dt.strftime("%d/%m/%Y").fillna("-")
+
+        def colorir_linhas_situacao(val):
+            if "🔴" in str(val): return "background-color: #FFCCCC; color: black;"
+            elif "🟡" in str(val): return "background-color: #FFF2CC; color: black;"
+            elif "🟢" in str(val): return "background-color: #D9EAD3; color: black;"
+            elif "🔵" in str(val): return "background-color: #E6F2FF; color: black;"
+            elif "⚫" in str(val): return "background-color: #EAEAEA; color: #7F7F7F;"
+            return ""
+
+        try:
+            df_estilizado = df_tabela.style.map(colorir_linhas_situacao, subset=["Lead Time"])
+        except AttributeError:
+            df_estilizado = df_tabela.style.applymap(colorir_linhas_situacao, subset=["Lead Time"])
+
+        st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
+
+    # ------------------------------------------------------------------
+    # ABA 2: DASHBOARD EXECUTIVO
+    # ------------------------------------------------------------------
+    with aba_executivo:
+        st.markdown("### 📊 Indicadores Consolidados da Carteira")
+
+        df_dash = df_filtrado[
+            df_filtrado["SITUACAO_PRAZO"].isin(
+                ["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"]
             )
-            
-            st.markdown("### 📑 Base de Ordens de Compra")
-            
-            colunas_tabela = {
-                "ORDEM_LIMPA": "Ordem de Compra",
-                "STATUS_AMIGAVEL": "Status",
-                "ALERTA_APROVACAO": "Alerta de Fluxo",
-                "DATA": "Data Criação da Ordem",
-                "DT_PRAZO_OC": "Prazo Entrega",
-                "LEAD_TIME_SINALIZADO": "Lead Time",
-                "SITUACAO_PRAZO": "Situação"
+        ].copy()
+
+        if not df_dash.empty:
+            st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
+            df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
+            df_setores.columns = ["Setor", "Quantidade"]
+            df_setores = df_setores.sort_values(by="Quantidade", ascending=True)
+
+            num_setores = len(df_setores)
+            altura_grafico = max(400, num_setores * 28)
+
+            fig_setores = px.bar(
+                df_setores, y="Setor", x="Quantidade",
+                orientation="h", text="Quantidade",
+                color_discrete_sequence=["#1f77b4"],
+            )
+            fig_setores.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"), height=altura_grafico,
+                margin=dict(l=220, r=40, t=20, b=20),
+                xaxis=dict(title=None, showgrid=False, showticklabels=False),
+                yaxis=dict(title=None, showgrid=False, dtick=1),
+            )
+            fig_setores.update_traces(textposition="inside", textfont=dict(size=12, color="white"))
+            st.plotly_chart(fig_setores, use_container_width=True)
+
+            st.markdown("---")
+
+            st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
+            df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
+
+            df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime("%m/%Y")
+            df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
+            df_mes.columns = ["Mês", "Volume de OCs"]
+
+            df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
+            df_mes = df_mes.sort_values("DATA_ORDEM")
+
+            fig_mes = px.bar(
+                df_mes, x="Mês", y="Volume de OCs",
+                text="Volume de OCs", color_discrete_sequence=["#00CC96"],
+            )
+            fig_mes.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"),
+                xaxis=dict(title=None, showgrid=False, type="category"),
+                yaxis=dict(title=None, showgrid=False, showticklabels=False),
+            )
+            fig_mes.update_traces(textposition="outside", textfont=dict(size=13, color="white"))
+            st.plotly_chart(fig_mes, use_container_width=True)
+
+            st.markdown("---")
+
+            st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
+            df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
+            df_prazos.columns = ["Situação", "Quantidade"]
+            df_prazos = df_prazos.sort_values(by="Quantidade", ascending=False)
+
+            cores_oficiais = {
+                "Atrasada": "#EF553B", "Vence em até 10 dias": "#FECB52",
+                "Dentro do Prazo": "#00CC96", "Recebida Total": "#1f77b4", "Cancelada": "#7F7F7F",
             }
-            
-            if "CD_FORNECEDOR" in df_filtrado.columns: colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
-            if "COMPRADOR" in df_filtrado.columns: colunas_tabela["COMPRADOR"] = "Comprador"
-            
-            df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
-            df_tabela["Data Criação da Ordem"] = df_tabela["Data Criação da Ordem"].dt.strftime('%d/%m/%Y').fillna('-')
-            df_tabela["Prazo Entrega"] = df_tabela["Prazo Entrega"].dt.strftime('%d/%m/%Y').fillna('-')
-            
-            def colorir_linhas_situacao(val):
-                if "🔴" in str(val): return 'background-color: #FFCCCC; color: black;'
-                elif "🟡" in str(val): return 'background-color: #FFF2CC; color: black;'
-                elif "🟢" in str(val): return 'background-color: #D9EAD3; color: black;'
-                elif "🔵" in str(val): return 'background-color: #E6F2FF; color: black;'
-                elif "⚫" in str(val): return 'background-color: #EAEAEA; color: #7F7F7F;'
-                return ''
-            
-            try:
-                df_estilizado = df_tabela.style.map(colorir_linhas_situacao, subset=["Lead Time"])
-            except AttributeError:
-                df_estilizado = df_tabela.style.applymap(colorir_linhas_situacao, subset=["Lead Time"])
-                
-            st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
 
-        # ------------------------------------------------------------------
-        # ABA 2: DASHBOARD EXECUTIVO 
-        # ------------------------------------------------------------------
-        with aba_executivo:
-            st.markdown("### 📊 Indicadores Consolidados da Carteira")
-            
-            df_dash = df_filtrado[df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"])].copy()
-            
-            if not df_dash.empty:
-                st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
-                df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
-                df_setores.columns = ["Setor", "Quantidade"]
-                df_setores = df_setores.sort_values(by="Quantidade", ascending=True)
-                
-                num_setores = len(df_setores)
-                altura_grafico = max(400, num_setores * 28) 
-                
-                fig_setores = px.bar(
-                    df_setores, y="Setor", x="Quantidade",
-                    orientation="h", text="Quantidade",
-                    color_discrete_sequence=["#1f77b4"]
-                )
-                fig_setores.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"), height=altura_grafico,
-                    margin=dict(l=220, r=40, t=20, b=20),
-                    xaxis=dict(title=None, showgrid=False, showticklabels=False),
-                    yaxis=dict(title=None, showgrid=False, dtick=1)
-                )
-                fig_setores.update_traces(textposition="inside", textfont=dict(size=12, color="white"))
-                st.plotly_chart(fig_setores, use_container_width=True)
-                
-                st.markdown("---")
-                
-                st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
-                df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
-                
-                df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime('%m/%Y')
-                df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
-                df_mes.columns = ["Mês", "Volume de OCs"]
-                
-                df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
-                df_mes = df_mes.sort_values("DATA_ORDEM")
-                
-                fig_mes = px.bar(
-                    df_mes, x="Mês", y="Volume de OCs",
-                    text="Volume de OCs", color_discrete_sequence=["#00CC96"]
-                )
-                fig_mes.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"),
-                    xaxis=dict(title=None, showgrid=False, type='category'),
-                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
-                )
-                fig_mes.update_traces(textposition="outside", textfont=dict(size=13, color="white"))
-                st.plotly_chart(fig_mes, use_container_width=True)
+            fig_prazos = px.bar(
+                df_prazos, x="Situação", y="Quantidade",
+                color="Situação", color_discrete_map=cores_oficiais, text="Quantidade",
+            )
+            fig_prazos.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(color="white"), showlegend=False,
+                xaxis=dict(title=None, showgrid=False),
+                yaxis=dict(title=None, showgrid=False, showticklabels=False),
+            )
+            fig_prazos.update_traces(textposition="outside", textfont=dict(size=14, color="white"))
+            st.plotly_chart(fig_prazos, use_container_width=True)
+        else:
+            st.info("Sem dados de prazos disponíveis com os filtros atuais.")
 
-                st.markdown("---")
-                
-                st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
-                df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
-                df_prazos.columns = ["Situação", "Quantidade"]
-                df_prazos = df_prazos.sort_values(by="Quantidade", ascending=False)
-                
-                cores_oficiais = {
-                    "Atrasada": "#EF553B", "Vence em até 10 dias": "#FECB52", 
-                    "Dentro do Prazo": "#00CC96", "Recebida Total": "#1f77b4", "Cancelada": "#7F7F7F"
-                }
-                
-                fig_prazos = px.bar(
-                    df_prazos, x="Situação", y="Quantidade",
-                    color="Situação", color_discrete_map=cores_oficiais, text="Quantidade"
-                )
-                fig_prazos.update_layout(
-                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
-                    font=dict(color="white"), showlegend=False,
-                    xaxis=dict(title=None, showgrid=False),
-                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
-                )
-                fig_prazos.update_traces(textposition="outside", textfont=dict(size=14, color="white"))
-                st.plotly_chart(fig_prazos, use_container_width=True)
-            else:
-                st.info("Sem dados de prazos disponíveis com os filtros atuais.")
-                
-    else:
-        st.error("Coluna 'ORDEM' não encontrada no arquivo.")
 else:
     st.info("Aguardando upload do relatório de compras.")
