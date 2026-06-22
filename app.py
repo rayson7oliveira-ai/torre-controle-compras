@@ -19,9 +19,7 @@ if arquivo_upload is not None:
     if arquivo_upload.name.endswith('.csv'):
         df_original = pd.read_csv(arquivo_upload, header=2, dtype={"ORDEM": str})
     else:
-        # CORREÇÃO AQUI: adicionado dayfirst=True para tratar o dia/mes/ano
-        else:
-        # Apenas lemos o arquivo sem o parâmetro dayfirst
+        # AQUI FOI REMOVIDO APENAS O dayfirst=True DO READ_EXCEL PARA NÃO DAR ERRO DE SINTAXE
         df_original = pd.read_excel(arquivo_upload, header=2, dtype={"ORDEM": str})
     
     df_original = df_original.dropna(how='all')
@@ -39,7 +37,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas
+        # Tratamento rigoroso de Datas (mantido o seu original)
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
@@ -260,7 +258,6 @@ if arquivo_upload is not None:
             df_dash = df_filtrado[df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"])].copy()
             
             if not df_dash.empty:
-                # 1. GRÁFICO HORIZONTAL DE TODOS OS SETORES - AJUSTADO CONFLITO DE TEXTO
                 st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
                 df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
                 df_setores.columns = ["Setor", "Quantidade"]
@@ -277,26 +274,22 @@ if arquivo_upload is not None:
                 fig_setores.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
                     font=dict(color="white"), height=altura_grafico,
-                    margin=dict(l=220, r=40, t=20, b=20), # Abre espaço na margem esquerda para nomes longos
+                    margin=dict(l=220, r=40, t=20, b=20),
                     xaxis=dict(title=None, showgrid=False, showticklabels=False),
                     yaxis=dict(title=None, showgrid=False, dtick=1)
                 )
-                # Altera posição para 'inside' para que o número não encavale com o nome do setor
                 fig_setores.update_traces(textposition="inside", textfont=dict(size=12, color="white"))
                 st.plotly_chart(fig_setores, use_container_width=True)
                 
                 st.markdown("---")
                 
-                # 2. GRÁFICO HISTÓRICO - CORRIGIDA A DUPLICAÇÃO DE BARRAS MENSAL
                 st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
                 df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
                 
-                # Agrupamento explícito por mês formatado para evitar quebras duplicadas
                 df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime('%m/%Y')
                 df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
                 df_mes.columns = ["Mês", "Volume de OCs"]
                 
-                # Garante ordenação cronológica correta na tela
                 df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
                 df_mes = df_mes.sort_values("DATA_ORDEM")
                 
@@ -307,7 +300,7 @@ if arquivo_upload is not None:
                 fig_mes.update_layout(
                     paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
                     font=dict(color="white"),
-                    xaxis=dict(title=None, showgrid=False, type='category'), # Força o Plotly a tratar como categoria única
+                    xaxis=dict(title=None, showgrid=False, type='category'),
                     yaxis=dict(title=None, showgrid=False, showticklabels=False)
                 )
                 fig_mes.update_traces(textposition="outside", textfont=dict(size=13, color="white"))
@@ -315,7 +308,6 @@ if arquivo_upload is not None:
 
                 st.markdown("---")
                 
-                # 3. GRÁFICO DE SITUAÇÃO
                 st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
                 df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
                 df_prazos.columns = ["Situação", "Quantidade"]
