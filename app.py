@@ -1,30 +1,3 @@
-Passo 1 — Localize o botão "Copy" no canto do bloco de código
-Quando você vê um bloco como este na minha resposta:
-
-```python
-import streamlit as st
-...
-```
-No canto superior direito do bloco existe um botão Copy (📋). Clique nele. NÃO selecione com o mouse, NÃO use Ctrl+A na página inteira.
-
-Passo 2 — Antes de colar, LIMPE o arquivo app.py
-Abra app.py no seu editor
-Ctrl+A (seleciona tudo)
-Delete (apaga tudo)
-O arquivo deve estar completamente vazio
-Passo 3 — Cole o código
-Ctrl+V no arquivo vazio.
-
-Passo 4 — Verifique a linha 1
-A primeira linha do arquivo DEVE ser exatamente:
-
-import streamlit as st
-Se a linha 1 tiver qualquer outra coisa (emoji, texto em português, #, 🔍, 🚀, ##, ---, etc.), está errado. Refaça do Passo 2.
-
-Passo 5 — Salve e dê commit no GitHub
-O Streamlit Cloud só atualiza depois que você faz git push ou edita pela interface do GitHub.
-
-📋 Aqui está o código novamente (use o botão Copy ↗️ no canto do bloco)
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -36,9 +9,9 @@ import unicodedata
 
 st.set_page_config(layout="wide", page_title="Follow-Up de Compras")
 
-st.title("🗂️ FOLLOW-UP DE COMPRAS")
+st.title("FOLLOW-UP DE COMPRAS")
 st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
-st.caption("💡 Cada usuário precisa fazer seu próprio upload do relatório. O processamento leva ~10s na primeira vez.")
+st.caption("Cada usuario precisa fazer seu proprio upload do relatorio. O processamento leva ~10s na primeira vez.")
 
 
 def _normalizar_nome(txt):
@@ -136,7 +109,7 @@ def parse_data_robusta(serie):
     return resultado
 
 
-@st.cache_data(show_spinner="Processando relatório CIGAM... (1ª vez demora ~10s)")
+@st.cache_data(show_spinner="Processando relatorio CIGAM...")
 def processar_arquivo(file_bytes, file_name):
     converters_padrao = {
         "ORDEM": _converter_ordem_texto,
@@ -177,7 +150,7 @@ def processar_arquivo(file_bytes, file_name):
     col_fornecedor = find_col(df_original, ["CD_FORNECEDOR", "FORNECEDOR", "COD_FORNECEDOR"])
 
     if not col_ordem:
-        return None, None, "Coluna 'ORDEM' não encontrada no arquivo."
+        return None, None, "Coluna 'ORDEM' nao encontrada no arquivo."
 
     renames = {}
     if col_ordem != "ORDEM":
@@ -235,10 +208,10 @@ def processar_arquivo(file_bytes, file_name):
         "40 - ENVIADO EMAIL":      "ENVIADA AO FORNECEDOR",
         "90 - CANCELADA":          "CANCELADA",
         "90 - CANCELADO":          "CANCELADA",
-        "VV - VERBA ULTRAPASSADA": "PENDENTE DE APROVAÇÃO",
+        "VV - VERBA ULTRAPASSADA": "PENDENTE DE APROVACAO",
         "10": "PENDENTE", "20": "APROVADA SEM ENVIO", "30": "RECEBIDA PARCIAL",
         "35": "RECEBIDA TOTAL", "40": "ENVIADA AO FORNECEDOR",
-        "90": "CANCELADA", "VV": "PENDENTE DE APROVAÇÃO",
+        "90": "CANCELADA", "VV": "PENDENTE DE APROVACAO",
     }
     df_original["STATUS_AMIGAVEL"] = df_original["CONTROLE_LIMPO"].map(mapa_status).fillna(
         df_original["CONTROLE_LIMPO"]
@@ -249,7 +222,7 @@ def processar_arquivo(file_bytes, file_name):
 
     lead_time = pd.Series([pd.NA] * n, index=df_original.index, dtype="object")
     situacao = pd.Series(["Sem Prazo"] * n, index=df_original.index)
-    sinalizado = pd.Series(["⚪ Sem Prazo"] * n, index=df_original.index)
+    sinalizado = pd.Series(["Sem Prazo"] * n, index=df_original.index)
 
     dias = (df_original["DT_PRAZO_OC"] - hoje).dt.days
 
@@ -260,29 +233,29 @@ def processar_arquivo(file_bytes, file_name):
 
     lead_time[mask_cancelada] = 888
     situacao[mask_cancelada]  = "Cancelada"
-    sinalizado[mask_cancelada] = "⚫ Cancelada"
+    sinalizado[mask_cancelada] = "Cancelada"
 
     mask_rt = mask_recebida & ~mask_cancelada
     lead_time[mask_rt] = 999
     situacao[mask_rt]  = "Recebida Total"
-    sinalizado[mask_rt] = "🔵 Recebida Total"
+    sinalizado[mask_rt] = "Recebida Total"
 
     mask_ativa = ~mask_cancelada & ~mask_recebida & mask_com_prazo
 
     mask_atrasada = mask_ativa & (dias < 0)
     lead_time[mask_atrasada] = dias[mask_atrasada]
     situacao[mask_atrasada]  = "Atrasada"
-    sinalizado[mask_atrasada] = "🔴 " + dias[mask_atrasada].astype("Int64").astype(str) + " dias"
+    sinalizado[mask_atrasada] = dias[mask_atrasada].astype("Int64").astype(str) + " dias"
 
     mask_vencendo = mask_ativa & (dias >= 0) & (dias <= 10)
     lead_time[mask_vencendo] = dias[mask_vencendo]
-    situacao[mask_vencendo]  = "Vence em até 10 dias"
-    sinalizado[mask_vencendo] = "🟡 +" + dias[mask_vencendo].astype("Int64").astype(str) + " dias"
+    situacao[mask_vencendo]  = "Vence em ate 10 dias"
+    sinalizado[mask_vencendo] = "+" + dias[mask_vencendo].astype("Int64").astype(str) + " dias"
 
     mask_dentro = mask_ativa & (dias > 10)
     lead_time[mask_dentro] = dias[mask_dentro]
     situacao[mask_dentro]  = "Dentro do Prazo"
-    sinalizado[mask_dentro] = "🟢 +" + dias[mask_dentro].astype("Int64").astype(str) + " dias"
+    sinalizado[mask_dentro] = "+" + dias[mask_dentro].astype("Int64").astype(str) + " dias"
 
     df_original["LEAD_TIME_NUMERICO"]   = lead_time
     df_original["SITUACAO_PRAZO"]       = situacao
@@ -295,7 +268,7 @@ def processar_arquivo(file_bytes, file_name):
     mask_travado = mask_vv & df_original["DATA_APROVACAO"].notna() & (dias_travado >= 3)
 
     alerta = pd.Series(["Ok"] * n, index=df_original.index)
-    alerta[mask_travado] = "⚠️ Travado há " + dias_travado[mask_travado].astype("Int64").astype(str) + " dias!"
+    alerta[mask_travado] = "Travado ha " + dias_travado[mask_travado].astype("Int64").astype(str) + " dias!"
     df_original["ALERTA_APROVACAO"] = alerta
 
     col_setor = find_col(df_original, ["SETOR"]) or find_col(df_original, ["GRUPO"])
@@ -307,7 +280,7 @@ def processar_arquivo(file_bytes, file_name):
 
 
 arquivo_upload = st.file_uploader(
-    "Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"]
+    "Carregue o relatorio Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"]
 )
 
 if arquivo_upload is not None:
@@ -323,7 +296,7 @@ if arquivo_upload is not None:
 
     df_oc = df_original.drop_duplicates(subset=["ORDEM_LIMPA"]).copy()
 
-    st.markdown("### 📅 Filtro por Período de Criação da Ordem")
+    st.markdown("### Filtro por Periodo de Criacao da Ordem")
 
     datas_validas = df_oc["DATA"].dropna()
     if not datas_validas.empty:
@@ -334,7 +307,7 @@ if arquivo_upload is not None:
         data_max_default = datetime.today().date()
 
     periodo_selecionado = st.date_input(
-        "Selecione o intervalo de datas (Data Inicial e Data Final):",
+        "Selecione o intervalo de datas:",
         value=(data_min_default, data_max_default),
         min_value=datetime(2000, 1, 1).date(),
         max_value=datetime(2050, 12, 31).date(),
@@ -348,7 +321,7 @@ if arquivo_upload is not None:
             & (df_filtrado_data["DATA"].dt.date <= dt_fim)
         ]
 
-    st.markdown("### 🔍 Filtros de Controle")
+    st.markdown("### Filtros de Controle")
     f1, f2, f3, f4 = st.columns(4)
 
     with f1:
@@ -376,19 +349,19 @@ if arquivo_upload is not None:
             lista_fornecedores = ["Todos"]
         fornecedor_sel = st.selectbox("Fornecedor", lista_fornecedores)
     with f4:
-        lista_prazos = ["Todos", "Atrasada", "Vence em até 10 dias", "Dentro do Prazo",
+        lista_prazos = ["Todos", "Atrasada", "Vence em ate 10 dias", "Dentro do Prazo",
                         "Sem Prazo", "Recebida Total", "Cancelada"]
-        prazo_sel = st.selectbox("Situação Prazo", lista_prazos)
+        prazo_sel = st.selectbox("Situacao Prazo", lista_prazos)
 
     busca_ordem = st.text_input(
-        "🔎 Buscar por número da Ordem (parcial ou completo - ex.: 66723 ou 066723)",
+        "Buscar por numero da Ordem (parcial ou completo - ex.: 66723 ou 066723)",
         value="",
-        placeholder="Digite o número da OC...",
+        placeholder="Digite o numero da OC...",
     ).strip()
 
     st.markdown("---")
     apenas_gargalos = st.checkbox(
-        "🚨 **Focar Apenas em Pendências** (Esconder OCs concluídas, canceladas ou no prazo)"
+        "Focar Apenas em Pendencias (Esconder OCs concluidas, canceladas ou no prazo)"
     )
 
     df_filtrado = df_filtrado_data.copy()
@@ -412,27 +385,27 @@ if arquivo_upload is not None:
 
     if apenas_gargalos:
         df_filtrado = df_filtrado[
-            df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Sem Prazo"])
+            df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em ate 10 dias", "Sem Prazo"])
             & (~df_filtrado["STATUS_AMIGAVEL"].isin(["RECEBIDA TOTAL", "CANCELADA"]))
         ]
 
-    aba_operacional, aba_executivo = st.tabs(["📋 Follow-up Operacional", "📊 Dashboard Executivo"])
+    aba_operacional, aba_executivo = st.tabs(["Follow-up Operacional", "Dashboard Executivo"])
 
     with aba_operacional:
-        st.markdown("### 🔴 Atenção Imediata (Gargalos do Dia)")
+        st.markdown("### Atencao Imediata (Gargalos do Dia)")
 
         qtd_total_oc        = df_filtrado["ORDEM_LIMPA"].nunique()
         qtd_atrasadas       = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Atrasada"]["ORDEM_LIMPA"].nunique()
         qtd_sem_envio       = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "APROVADA SEM ENVIO"]["ORDEM_LIMPA"].nunique()
-        qtd_vencendo        = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em até 10 dias"]["ORDEM_LIMPA"].nunique()
-        qtd_verba_estourada = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "PENDENTE DE APROVAÇÃO"]["ORDEM_LIMPA"].nunique()
+        qtd_vencendo        = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == "Vence em ate 10 dias"]["ORDEM_LIMPA"].nunique()
+        qtd_verba_estourada = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == "PENDENTE DE APROVACAO"]["ORDEM_LIMPA"].nunique()
 
         c0, c1, c2, c3, c4 = st.columns(5)
-        c0.metric("📦 Total Geral de OCs Real", qtd_total_oc)
-        c1.metric("🔴 OCs Atrasadas", qtd_atrasadas)
-        c2.metric("🟠 Aprovadas sem Envio", qtd_sem_envio)
-        c3.metric("🟡 Vencendo em até 10 dias", qtd_vencendo)
-        c4.metric("🟣 Pendentes de Aprovação", qtd_verba_estourada)
+        c0.metric("Total Geral de OCs Real", qtd_total_oc)
+        c1.metric("OCs Atrasadas", qtd_atrasadas)
+        c2.metric("Aprovadas sem Envio", qtd_sem_envio)
+        c3.metric("Vencendo em ate 10 dias", qtd_vencendo)
+        c4.metric("Pendentes de Aprovacao", qtd_verba_estourada)
 
         st.markdown("---")
 
@@ -440,22 +413,22 @@ if arquivo_upload is not None:
         df_filtrado.to_excel(buffer, index=False, sheet_name="FollowUp_Filtrado")
 
         st.download_button(
-            label="📥 Exportar Dados Filtrados para Excel",
+            label="Exportar Dados Filtrados para Excel",
             data=buffer.getvalue(),
             file_name=f"FollowUp_FloraMDF_{datetime.today().strftime('%Y%m%d')}.xlsx",
             mime="application/vnd.ms-excel",
         )
 
-        st.markdown("### 📑 Base de Ordens de Compra")
+        st.markdown("### Base de Ordens de Compra")
 
         colunas_tabela = {
             "ORDEM_LIMPA": "Ordem de Compra",
             "STATUS_AMIGAVEL": "Status",
             "ALERTA_APROVACAO": "Alerta de Fluxo",
-            "DATA": "Data Criação da Ordem",
+            "DATA": "Data Criacao da Ordem",
             "DT_PRAZO_OC": "Prazo Entrega",
             "LEAD_TIME_SINALIZADO": "Lead Time",
-            "SITUACAO_PRAZO": "Situação",
+            "SITUACAO_PRAZO": "Situacao",
         }
         if "CD_FORNECEDOR" in df_filtrado.columns:
             colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
@@ -463,20 +436,25 @@ if arquivo_upload is not None:
             colunas_tabela["COMPRADOR"] = "Comprador"
 
         df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
-        df_tabela["Data Criação da Ordem"] = df_tabela["Data Criação da Ordem"].dt.strftime("%d/%m/%Y").fillna("-")
+        df_tabela["Data Criacao da Ordem"] = df_tabela["Data Criacao da Ordem"].dt.strftime("%d/%m/%Y").fillna("-")
         df_tabela["Prazo Entrega"]         = df_tabela["Prazo Entrega"].dt.strftime("%d/%m/%Y").fillna("-")
 
         def colorir_linhas_situacao(val):
             v = str(val)
-            if "🔴" in v:
+            if "Atrasada" in v or (v.startswith("-") and "dias" in v):
                 return "background-color: #FFCCCC; color: black;"
-            elif "🟡" in v:
-                return "background-color: #FFF2CC; color: black;"
-            elif "🟢" in v:
-                return "background-color: #D9EAD3; color: black;"
-            elif "🔵" in v:
+            elif v.startswith("+"):
+                try:
+                    d = int(v.replace("+", "").replace(" dias", "").strip())
+                    if d <= 10:
+                        return "background-color: #FFF2CC; color: black;"
+                    else:
+                        return "background-color: #D9EAD3; color: black;"
+                except Exception:
+                    return ""
+            elif "Recebida" in v:
                 return "background-color: #E6F2FF; color: black;"
-            elif "⚫" in v:
+            elif "Cancelada" in v:
                 return "background-color: #EAEAEA; color: #7F7F7F;"
             return ""
 
@@ -488,22 +466,21 @@ if arquivo_upload is not None:
         st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
 
     with aba_executivo:
-        st.markdown("### 📊 Indicadores Consolidados da Carteira")
+        st.markdown("### Indicadores Consolidados da Carteira")
 
         df_dash = df_filtrado[
             df_filtrado["SITUACAO_PRAZO"].isin(
-                ["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"]
+                ["Atrasada", "Vence em ate 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"]
             )
         ].copy()
 
         if not df_dash.empty:
-            st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
+            st.markdown(f"#### Distribuicao por Setor ({col_setor.title()})")
             df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
             df_setores.columns = ["Setor", "Quantidade"]
             df_setores = df_setores.sort_values(by="Quantidade", ascending=True)
 
-            num_setores = len(df_setores)
-            altura_grafico = max(400, num_setores * 28)
+            altura_grafico = max(400, len(df_setores) * 28)
 
             fig_setores = px.bar(df_setores, y="Setor", x="Quantidade",
                                  orientation="h", text="Quantidade",
@@ -519,15 +496,15 @@ if arquivo_upload is not None:
             st.plotly_chart(fig_setores, use_container_width=True)
 
             st.markdown("---")
-            st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
+            st.markdown("#### Historico de Abertura de OCs por Mes")
             df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
             df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime("%m/%Y")
             df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
-            df_mes.columns = ["Mês", "Volume de OCs"]
-            df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
+            df_mes.columns = ["Mes", "Volume de OCs"]
+            df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mes"], format="%m/%Y")
             df_mes = df_mes.sort_values("DATA_ORDEM")
 
-            fig_mes = px.bar(df_mes, x="Mês", y="Volume de OCs",
+            fig_mes = px.bar(df_mes, x="Mes", y="Volume de OCs",
                              text="Volume de OCs", color_discrete_sequence=["#00CC96"])
             fig_mes.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
@@ -539,16 +516,16 @@ if arquivo_upload is not None:
             st.plotly_chart(fig_mes, use_container_width=True)
 
             st.markdown("---")
-            st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
+            st.markdown("#### Situacao Geral dos Prazos das OCs")
             df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
-            df_prazos.columns = ["Situação", "Quantidade"]
+            df_prazos.columns = ["Situacao", "Quantidade"]
             df_prazos = df_prazos.sort_values(by="Quantidade", ascending=False)
 
-            cores_oficiais = {"Atrasada": "#EF553B", "Vence em até 10 dias": "#FECB52",
+            cores_oficiais = {"Atrasada": "#EF553B", "Vence em ate 10 dias": "#FECB52",
                               "Dentro do Prazo": "#00CC96", "Recebida Total": "#1f77b4", "Cancelada": "#7F7F7F"}
 
-            fig_prazos = px.bar(df_prazos, x="Situação", y="Quantidade",
-                                color="Situação", color_discrete_map=cores_oficiais, text="Quantidade")
+            fig_prazos = px.bar(df_prazos, x="Situacao", y="Quantidade",
+                                color="Situacao", color_discrete_map=cores_oficiais, text="Quantidade")
             fig_prazos.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(color="white"), showlegend=False,
@@ -558,7 +535,8 @@ if arquivo_upload is not None:
             fig_prazos.update_traces(textposition="outside", textfont=dict(size=14, color="white"))
             st.plotly_chart(fig_prazos, use_container_width=True)
         else:
-            st.info("Sem dados de prazos disponíveis com os filtros atuais.")
+            st.info("Sem dados de prazos disponiveis com os filtros atuais.")
 
 else:
-    st.info("Aguardando upload do relatório de compras.")
+    st.info("Aguardando upload do relatorio de compras.")
+```
