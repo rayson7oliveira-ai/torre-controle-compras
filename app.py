@@ -2,36 +2,48 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
+# --- CONFIGURAÇÃO ---
 st.set_page_config(layout="wide", page_title="Central de Compras")
 st.title("🗂️ CENTRAL OPERACIONAL DE COMPRAS")
 
+# --- INTERFACE ---
 arquivo_upload = st.file_uploader("Carregue o arquivo Excel do CIGAM", type=["xlsx"])
 
 if arquivo_upload:
     try:
-        # AQUI A MUDANÇA: Leitura inicial simples para inspecionar
-        # Se o skiprows=7 está pegando cabeçalhos errados, vamos ler tudo
-        df_raw = pd.read_excel(arquivo_upload, header=None)
+        # Lê o arquivo. Se o erro for na linha de cabeçalho, removemos o skiprows 
+        # e limpamos o que for necessário depois.
+        df = pd.read_excel(arquivo_upload)
+
+        # 1. Limpeza de colunas: procura a coluna que contém 'NUMERO_OC'
+        # Isso evita o erro de 'KeyError' ou 'IndexError'
+        coluna_ordem = [c for c in df.columns if 'NUMERO_OC' in str(c).upper()]
         
-        # Procura onde está a linha de cabeçalho real (geralmente onde aparece 'NUMERO_OC' ou 'ORDEM')
-        # Vamos procurar a primeira linha que contenha esses termos
-        idx = df_raw[df_raw.apply(lambda row: row.astype(str).str.contains('NUMERO_OC|ORDEM|OC', case=False).any(), axis=1)].index[0]
+        if not coluna_ordem:
+            st.error("Não encontrei a coluna 'NUMERO_OC'. Por favor, verifique se o arquivo é o correto.")
+            st.write("Colunas encontradas:", list(df.columns))
+            st.stop()
+            
+        df = df.rename(columns={coluna_ordem[0]: 'ORDEM'})
         
-        # Recarrega o arquivo usando essa linha como cabeçalho
-        df = pd.read_excel(arquivo_upload, skiprows=idx)
-        
-        # Mapeia a coluna de ordem dinamicamente
-        col_ordem = [c for c in df.columns if 'ORDEM' in str(c).upper() or 'OC' in str(c).upper()][0]
-        df = df.rename(columns={col_ordem: 'ORDEM'})
-        
-        # Limpeza
+        # 2. Filtragem de dados inúteis (SC: e vazios)
         df = df.dropna(subset=['ORDEM'])
         df = df[~df['ORDEM'].astype(str).str.contains('SC:', na=False)]
         df = df.drop_duplicates(subset=['ORDEM'])
         
-        st.success("Arquivo carregado e limpo com sucesso!")
+        # 3. Processamento de status (se existirem as colunas)
+        if 'CONTROLE' in df.columns:
+            def traduzir_status(c):
+                c = str(c)
+                if "20" in c: return "APROVADA SEM ENVIO"
+                if "30" in c: return "RECEBIDA PARCIAL"
+                if "35" in c: return "RECEBIDA TOTAL"
+                return "OUTROS"
+            df["STATUS_AMIGAVEL"] = df["CONTROLE"].apply(traduzir_status)
+        
+        # 4. Exibição
+        st.success("Arquivo processado com sucesso!")
         st.dataframe(df, use_container_width=True)
-            
+
     except Exception as e:
         st.error(f"Erro ao processar: {e}")
-        st.write("Por favor, verifique se o seu arquivo tem cabeçalhos nas primeiras linhas.")
