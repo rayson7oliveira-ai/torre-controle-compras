@@ -16,8 +16,7 @@ st.subheader("Monitoramento Operacional de Ordens de Compra (OC)")
 arquivo_upload = st.file_uploader("Carregue o relatório Excel de Follow Up (CIGAM)", type=["xlsx", "xls", "csv"])
 
 if arquivo_upload is not None:
-    # CORREÇÃO: O CIGAM inicia a tabela na linha 8. 
-    # Usamos skiprows=7 para que a linha 8 se torne o cabeçalho.
+    # A ÚNICA ALTERAÇÃO FOI AQUI: skiprows=7 garante que a linha 8 seja o cabeçalho.
     if arquivo_upload.name.endswith('.csv'):
         df_original = pd.read_csv(arquivo_upload, skiprows=7, dtype={"ORDEM": str})
     else:
@@ -38,7 +37,7 @@ if arquivo_upload is not None:
         
         df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
         
-        # Tratamento rigoroso de Datas
+        # Tratamento rigoroso de Datas (mantido o seu original)
         df_original["DATA"] = pd.to_datetime(df_original["DATA"], dayfirst=True, errors="coerce")
         df_original["DT_PRAZO_OC"] = pd.to_datetime(df_original["DT_PRAZO_OC"], dayfirst=True, errors="coerce")
         df_original["DATA_APROVACAO"] = pd.to_datetime(df_original["DATA_APROVACAO"], dayfirst=True, errors="coerce")
@@ -259,4 +258,82 @@ if arquivo_upload is not None:
             df_dash = df_filtrado[df_filtrado["SITUACAO_PRAZO"].isin(["Atrasada", "Vence em até 10 dias", "Dentro do Prazo", "Recebida Total", "Cancelada"])].copy()
             
             if not df_dash.empty:
-                st.markdown(f"#### 🏢 Distribuição por Setor ({col
+                st.markdown(f"#### 🏢 Distribuição por Setor ({col_setor.title()})")
+                df_setores = df_dash.groupby(col_setor)["ORDEM_LIMPA"].nunique().reset_index()
+                df_setores.columns = ["Setor", "Quantidade"]
+                df_setores = df_setores.sort_values(by="Quantidade", ascending=True)
+                
+                num_setores = len(df_setores)
+                altura_grafico = max(400, num_setores * 28) 
+                
+                fig_setores = px.bar(
+                    df_setores, y="Setor", x="Quantidade",
+                    orientation="h", text="Quantidade",
+                    color_discrete_sequence=["#1f77b4"]
+                )
+                fig_setores.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                    font=dict(color="white"), height=altura_grafico,
+                    margin=dict(l=220, r=40, t=20, b=20),
+                    xaxis=dict(title=None, showgrid=False, showticklabels=False),
+                    yaxis=dict(title=None, showgrid=False, dtick=1)
+                )
+                fig_setores.update_traces(textposition="inside", textfont=dict(size=12, color="white"))
+                st.plotly_chart(fig_setores, use_container_width=True)
+                
+                st.markdown("---")
+                
+                st.markdown("#### 📆 Histórico de Abertura de OCs por Mês")
+                df_dash_valid_date = df_dash.dropna(subset=["DATA"]).copy()
+                
+                df_dash_valid_date["MES_ANO_TEXTO"] = df_dash_valid_date["DATA"].dt.strftime('%m/%Y')
+                df_mes = df_dash_valid_date.groupby("MES_ANO_TEXTO")["ORDEM_LIMPA"].nunique().reset_index()
+                df_mes.columns = ["Mês", "Volume de OCs"]
+                
+                df_mes["DATA_ORDEM"] = pd.to_datetime(df_mes["Mês"], format="%m/%Y")
+                df_mes = df_mes.sort_values("DATA_ORDEM")
+                
+                fig_mes = px.bar(
+                    df_mes, x="Mês", y="Volume de OCs",
+                    text="Volume de OCs", color_discrete_sequence=["#00CC96"]
+                )
+                fig_mes.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                    font=dict(color="white"),
+                    xaxis=dict(title=None, showgrid=False, type='category'),
+                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
+                )
+                fig_mes.update_traces(textposition="outside", textfont=dict(size=13, color="white"))
+                st.plotly_chart(fig_mes, use_container_width=True)
+
+                st.markdown("---")
+                
+                st.markdown("#### ⏳ Situação Geral dos Prazos das OCs")
+                df_prazos = df_dash.groupby("SITUACAO_PRAZO")["ORDEM_LIMPA"].nunique().reset_index()
+                df_prazos.columns = ["Situação", "Quantidade"]
+                df_prazos = df_prazos.sort_values(by="Quantidade", ascending=False)
+                
+                cores_oficiais = {
+                    "Atrasada": "#EF553B", "Vence em até 10 dias": "#FECB52", 
+                    "Dentro do Prazo": "#00CC96", "Recebida Total": "#1f77b4", "Cancelada": "#7F7F7F"
+                }
+                
+                fig_prazos = px.bar(
+                    df_prazos, x="Situação", y="Quantidade",
+                    color="Situação", color_discrete_map=cores_oficiais, text="Quantidade"
+                )
+                fig_prazos.update_layout(
+                    paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', 
+                    font=dict(color="white"), showlegend=False,
+                    xaxis=dict(title=None, showgrid=False),
+                    yaxis=dict(title=None, showgrid=False, showticklabels=False)
+                )
+                fig_prazos.update_traces(textposition="outside", textfont=dict(size=14, color="white"))
+                st.plotly_chart(fig_prazos, use_container_width=True)
+            else:
+                st.info("Sem dados de prazos disponíveis com os filtros atuais.")
+                
+    else:
+        st.error("Coluna 'ORDEM' não encontrada no arquivo.")
+else:
+    st.info("Aguardando upload do relatório de compras.")
