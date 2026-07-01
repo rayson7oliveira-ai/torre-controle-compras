@@ -1,3 +1,7 @@
+Data em português → uso format="DD/MM/YYYY" no st.date_input
+Filtro por Criador da SC → detecto a coluna CRIADOR SC e adiciono um 5º selectbox
+Aqui vai o código completo atualizado. Lembra: a última linha do arquivo é st.info("Aguardando upload do relatorio de compras."). Se depois tiver ``` ou qualquer outra coisa, apaga.
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -148,6 +152,7 @@ def processar_arquivo(file_bytes, file_name):
     col_aprovacao  = find_col(df_original, ["DATA_APROVACAO", "DT_APROVACAO", "APROVACAO"])
     col_comprador  = find_col(df_original, ["COMPRADOR", "USUARIO", "RESPONSAVEL"])
     col_fornecedor = find_col(df_original, ["CD_FORNECEDOR", "FORNECEDOR", "COD_FORNECEDOR"])
+    col_criador    = find_col(df_original, ["CRIADOR SC", "CRIADOR_SC", "CRIADOR", "CRIADORSC"])
 
     if not col_ordem:
         return None, None, "Coluna 'ORDEM' nao encontrada no arquivo."
@@ -167,6 +172,8 @@ def processar_arquivo(file_bytes, file_name):
         renames[col_comprador] = "COMPRADOR"
     if col_fornecedor and col_fornecedor != "CD_FORNECEDOR":
         renames[col_fornecedor] = "CD_FORNECEDOR"
+    if col_criador and col_criador != "CRIADOR_SC":
+        renames[col_criador] = "CRIADOR_SC"
     if renames:
         df_original = df_original.rename(columns=renames)
 
@@ -183,7 +190,7 @@ def processar_arquivo(file_bytes, file_name):
 
     df_original = df_original[df_original["ORDEM_LIMPA"].str.len() > 0]
 
-    for c in ("COMPRADOR", "CD_FORNECEDOR"):
+    for c in ("COMPRADOR", "CD_FORNECEDOR", "CRIADOR_SC"):
         if c in df_original.columns:
             df_original[c] = (
                 df_original[c].astype(str).str.strip()
@@ -307,10 +314,11 @@ if arquivo_upload is not None:
         data_max_default = datetime.today().date()
 
     periodo_selecionado = st.date_input(
-        "Selecione o intervalo de datas:",
+        "Selecione o intervalo de datas (Data Inicial e Data Final):",
         value=(data_min_default, data_max_default),
         min_value=datetime(2000, 1, 1).date(),
         max_value=datetime(2050, 12, 31).date(),
+        format="DD/MM/YYYY",
     )
 
     df_filtrado_data = df_oc.copy()
@@ -322,7 +330,7 @@ if arquivo_upload is not None:
         ]
 
     st.markdown("### Filtros de Controle")
-    f1, f2, f3, f4 = st.columns(4)
+    f1, f2, f3, f4, f5 = st.columns(5)
 
     with f1:
         if "COMPRADOR" in df_filtrado_data.columns:
@@ -349,6 +357,15 @@ if arquivo_upload is not None:
             lista_fornecedores = ["Todos"]
         fornecedor_sel = st.selectbox("Fornecedor", lista_fornecedores)
     with f4:
+        if "CRIADOR_SC" in df_filtrado_data.columns:
+            lista_criadores = ["Todos"] + sorted(
+                [str(x) for x in df_filtrado_data["CRIADOR_SC"].dropna().unique()
+                 if str(x).strip() not in ["nan", "None", "", "-"]]
+            )
+        else:
+            lista_criadores = ["Todos"]
+        criador_sel = st.selectbox("Criador da SC", lista_criadores)
+    with f5:
         lista_prazos = ["Todos", "Atrasada", "Vence em ate 10 dias", "Dentro do Prazo",
                         "Sem Prazo", "Recebida Total", "Cancelada"]
         prazo_sel = st.selectbox("Situacao Prazo", lista_prazos)
@@ -371,6 +388,8 @@ if arquivo_upload is not None:
         df_filtrado = df_filtrado[df_filtrado["STATUS_AMIGAVEL"] == status_sel]
     if fornecedor_sel != "Todos" and "CD_FORNECEDOR" in df_filtrado.columns:
         df_filtrado = df_filtrado[df_filtrado["CD_FORNECEDOR"] == fornecedor_sel]
+    if criador_sel != "Todos" and "CRIADOR_SC" in df_filtrado.columns:
+        df_filtrado = df_filtrado[df_filtrado["CRIADOR_SC"] == criador_sel]
     if prazo_sel != "Todos":
         df_filtrado = df_filtrado[df_filtrado["SITUACAO_PRAZO"] == prazo_sel]
 
@@ -434,6 +453,8 @@ if arquivo_upload is not None:
             colunas_tabela["CD_FORNECEDOR"] = "Fornecedor"
         if "COMPRADOR" in df_filtrado.columns:
             colunas_tabela["COMPRADOR"] = "Comprador"
+        if "CRIADOR_SC" in df_filtrado.columns:
+            colunas_tabela["CRIADOR_SC"] = "Criador da SC"
 
         df_tabela = df_filtrado[list(colunas_tabela.keys())].rename(columns=colunas_tabela)
         df_tabela["Data Criacao da Ordem"] = df_tabela["Data Criacao da Ordem"].dt.strftime("%d/%m/%Y").fillna("-")
