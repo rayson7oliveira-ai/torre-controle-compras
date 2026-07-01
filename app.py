@@ -1,7 +1,3 @@
-Data em português → uso format="DD/MM/YYYY" no st.date_input
-Filtro por Criador da SC → detecto a coluna CRIADOR SC e adiciono um 5º selectbox
-Aqui vai o código completo atualizado. Lembra: a última linha do arquivo é st.info("Aguardando upload do relatorio de compras."). Se depois tiver ``` ou qualquer outra coisa, apaga.
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -560,3 +556,4 @@ if arquivo_upload is not None:
 
 else:
     st.info("Aguardando upload do relatorio de compras.")
+```
