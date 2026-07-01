@@ -556,4 +556,3 @@ if arquivo_upload is not None:
 
 else:
     st.info("Aguardando upload do relatorio de compras.")
-```
